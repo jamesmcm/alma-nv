@@ -14,7 +14,7 @@ impl LoopDevice {
         let losetup = Tool::find("losetup")?;
         let output = losetup
             .execute()
-            .args(&["--find", "-P", "--show"])
+            .args(["--find", "-P", "--show"])
             .arg(file)
             .output()
             .context("Error creating the image")?;

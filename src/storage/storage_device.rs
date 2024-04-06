@@ -73,10 +73,9 @@ impl<'a> StorageDevice<'a> {
         let name = if self
             .name
             .chars()
-            .rev()
-            .next()
+            .next_back()
             .expect("Storage device name is empty")
-            .is_digit(10)
+            .is_ascii_digit()
         {
             format!("{}p{}", self.name, index)
         } else {

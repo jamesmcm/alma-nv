@@ -166,7 +166,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
 
     sgdisk
         .execute()
-        .args(&[
+        .args([
             "-Z",
             "-o",
             &format!("--new=1::+{}M", boot_size),
@@ -175,7 +175,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             "--typecode=1:EF00",
             "--typecode=2:EF02",
         ])
-        .arg(&disk_path)
+        .arg(disk_path)
         .run()
         .context("Partitioning error")?;
 
@@ -270,14 +270,13 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["passwd", "-d", "root"])
+        .args(["passwd", "-d", "root"])
         .run()
         .context("Failed to delete the root password")?;
 
     info!("Setting locale");
     fs::OpenOptions::new()
         .append(true)
-        .write(true)
         .open(mount_point.path().join("etc/locale.gen"))
         .and_then(|mut locale_gen| locale_gen.write_all(b"en_US.UTF-8 UTF-8\n"))
         .context("Failed to create locale.gen")?;
@@ -298,7 +297,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["useradd", "-m", "aur"])
+        .args(["useradd", "-m", "aur"])
         .run()
         .context("Failed to create temporary user to install AUR packages")?;
 
@@ -309,7 +308,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["sudo", "-u", "aur"])
+        .args(["sudo", "-u", "aur"])
         .arg("git")
         .arg("clone")
         .arg(format!(
@@ -323,7 +322,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&[
+        .args([
             "bash",
             "-c",
             &format!(
@@ -337,7 +336,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["sudo", "-u", "aur"])
+        .args(["sudo", "-u", "aur"])
         .args(&command.aur_helper.get_install_command())
         .args(aur_pacakges)
         .run()
@@ -347,7 +346,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["userdel", "-r", "aur"])
+        .args(["userdel", "-r", "aur"])
         .run()
         .context("Failed to delete temporary aur user")?;
 
@@ -413,7 +412,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["systemctl", "enable", "NetworkManager"])
+        .args(["systemctl", "enable", "NetworkManager"])
         .run()
         .context("Failed to enable NetworkManager")?;
 
@@ -433,7 +432,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["mkinitcpio", "-p", "linux"])
+        .args(["mkinitcpio", "-P"])
         .run()
         .context("Failed to run mkinitcpio - do you have the base and linux packages installed?")?;
 
@@ -444,7 +443,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             .expect("No tool for blkid")
             .execute()
             .arg(root_partition_base.path())
-            .args(&["-o", "value", "-s", "UUID"])
+            .args(["-o", "value", "-s", "UUID"])
             .run_text_output()
             .context("Failed to run blkid")?;
         let trimmed = uuid.trim();
@@ -467,7 +466,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     arch_chroot
         .execute()
         .arg(mount_point.path())
-        .args(&["bash", "-c"])
+        .args(["bash", "-c"])
         .arg(format!("grub-install --target=i386-pc --boot-directory /boot {} && grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable &&  grub-mkconfig -o /boot/grub/grub.cfg", disk_path.display()))
         .run().context("Failed to install grub")?;
 

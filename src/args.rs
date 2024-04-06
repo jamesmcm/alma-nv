@@ -11,7 +11,7 @@ fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
     Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(name = "alma", about = "Arch Linux Mobile Appliance", version, author)]
 pub struct App {
     /// Verbose output
@@ -22,7 +22,7 @@ pub struct App {
     pub cmd: Command,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub enum Command {
     #[clap(name = "create", about = "Create a new Arch Linux USB")]
     Create(CreateCommand),
@@ -34,11 +34,11 @@ pub enum Command {
     Qemu(QemuCommand),
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct CreateCommand {
     /// Either a path to a removable block device or a nonexisting file if --image is specified
     #[clap()]
-    pub path: Option<PathBuf>, // TODO: Why is this optional?
+    pub path: Option<PathBuf>, // If not present then user is prompted interactively
 
     /// Path to a pacman.conf file which will be used to pacstrap packages into the image.
     ///
@@ -71,8 +71,8 @@ pub struct CreateCommand {
     pub presets: Vec<PathBuf>,
 
     /// Create an image with a certain size in the given path instead of using an actual block device
-    #[clap(long = "image", value_name = "size", requires = "path")]
-    pub image: Option<Byte>, // TODO: Check parsing
+    #[clap(long = "image", value_name = "SIZE", requires = "path", value_parser = parse_bytes)]
+    pub image: Option<Byte>,
 
     /// Overwrite existing image files. Use with caution!
     #[clap(long = "overwrite")]
@@ -94,7 +94,7 @@ pub struct CreateCommand {
     pub aur_helper: AurHelper,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct ChrootCommand {
     /// Path starting with /dev/disk/by-id for the USB drive
     #[clap()]
@@ -109,7 +109,7 @@ pub struct ChrootCommand {
     pub command: Vec<String>,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct QemuCommand {
     /// Path starting with /dev/disk/by-id for the USB drive
     #[clap()]
@@ -118,4 +118,62 @@ pub struct QemuCommand {
     /// Arguments to pass to qemu
     #[clap()]
     pub args: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_byte_parsing() {
+        let app_parse =
+            App::try_parse_from(vec!["alma-nv", "create", "--image", "500MiB", "/path/test"]);
+        match app_parse {
+            Err(e) => {
+                println!("{}", e);
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    let path = PathBuf::from_str("/path/test").unwrap();
+
+                    assert_eq!(
+                        cmd.image,
+                        Some(Byte::from_i128_with_unit(500, byte_unit::Unit::MiB).unwrap())
+                    );
+                    assert_eq!(cmd.path, Some(path));
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_byte_parsing_case_insensitive() {
+        let app_parse =
+            App::try_parse_from(vec!["alma-nv", "create", "--image", "500mb", "/path/test"]);
+        match app_parse {
+            Err(e) => {
+                println!("{}", e);
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    let path = PathBuf::from_str("/path/test").unwrap();
+
+                    assert_eq!(
+                        cmd.image,
+                        Some(Byte::from_i128_with_unit(500, byte_unit::Unit::MB).unwrap())
+                    );
+                    assert_eq!(cmd.path, Some(path));
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
 }

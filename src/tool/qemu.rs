@@ -12,7 +12,7 @@ pub fn qemu(command: args::QemuCommand) -> anyhow::Result<()> {
     let qemu = Tool::find("qemu-system-x86_64")?;
 
     let mut run = qemu.execute();
-    run.args(&[
+    run.args([
         "-m",
         "4G",
         "-netdev",
@@ -33,7 +33,7 @@ pub fn qemu(command: args::QemuCommand) -> anyhow::Result<()> {
 
     if PathBuf::from("/dev/kvm").exists() {
         debug!("KVM is enabled");
-        run.args(&["-enable-kvm", "-cpu", "host"]);
+        run.args(["-enable-kvm", "-cpu", "host"]);
     }
 
     let err = run.exec();
