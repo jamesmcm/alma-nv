@@ -1,6 +1,7 @@
-# ALMA - Arch Linux Mobile Appliance
+# ALMA Nueva - Arch Linux Mobile Appliance
 
-**Note**: This project is no longer maintained, and some people have reported that it made their host system unbootable. Use at your own risk.
+ALMA Nueva (alma-nv) is a maintained and updated fork of [ALMA](https://github.com/r-darwish/alma) originally created by
+[@r-darwish](https://github.com/r-darwish).
 
 Almost every live Linux distribution out there is meant for a specific purpose, whether it's data
 rescue, privacy, penetration testing or anything else. There are some more generic distributions

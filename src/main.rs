@@ -10,6 +10,7 @@ mod tool;
 use anyhow::{anyhow, Context};
 use args::Command;
 use byte_unit::Byte;
+use clap::Parser;
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Select};
 use log::{debug, error, info, log_enabled, Level, LevelFilter};
@@ -24,13 +25,12 @@ use std::thread;
 use std::time::Duration;
 use storage::EncryptedDevice;
 use storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice, MountStack};
-use structopt::StructOpt;
 use tempfile::tempdir;
 use tool::Tool;
 
 fn main() -> anyhow::Result<()> {
-    // Get struct of args using structopt
-    let app = args::App::from_args();
+    // Get struct of args using clap
+    let app = args::App::parse();
 
     // Set up logging
     let mut builder = pretty_env_logger::formatted_timed_builder();
@@ -78,7 +78,7 @@ fn create_image(path: &Path, size: Byte, overwrite: bool) -> anyhow::Result<Loop
         }
         let file = options.open(path).context("Error creating the image")?;
 
-        file.set_len(size.get_bytes() as u64)
+        file.set_len(size.as_u64())
             .context("Error creating the image")?;
     }
 
@@ -314,9 +314,9 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .arg("clone")
         .arg(format!(
             "https://aur.archlinux.org/{}.git",
-            &command.aur_helper.package_name
+            &command.aur_helper.get_package_name()
         ))
-        .arg(format!("/home/aur/{}", &command.aur_helper.name))
+        .arg(format!("/home/aur/{}", &command.aur_helper.to_string()))
         .run()
         .context("Failed to clone AUR helper package")?;
 
@@ -328,7 +328,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             "-c",
             &format!(
                 "cd /home/aur/{} && sudo -u aur makepkg -s -i --noconfirm",
-                &command.aur_helper.name
+                &command.aur_helper.to_string()
             ),
         ])
         .run()
@@ -338,7 +338,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .execute()
         .arg(mount_point.path())
         .args(&["sudo", "-u", "aur"])
-        .args(&command.aur_helper.install_command)
+        .args(&command.aur_helper.get_install_command())
         .args(aur_pacakges)
         .run()
         .context("Failed to install AUR packages")?;
