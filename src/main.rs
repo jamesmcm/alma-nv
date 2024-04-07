@@ -145,7 +145,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         None
     };
 
-    let storage_device = storage::StorageDevice::from_path(
+    let mut storage_device = storage::StorageDevice::from_path(
         image_loop
             .as_ref()
             .map(|loop_dev| {
@@ -156,7 +156,9 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         command.allow_non_removable,
     )?;
 
-    let mount_point = tempdir().context("Error creating a temporary directory")?;
+    // TODO: Warn and prompt if unmounting, as could mean wrong disk chosen
+    storage_device.umount_if_needed();
+
     let disk_path = storage_device.path();
 
     info!("Partitioning the block device");
@@ -206,6 +208,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
 
     let root_filesystem = Filesystem::format(root_partition, FilesystemType::Ext4, &mkext4)?;
 
+    let mount_point = tempdir().context("Error creating a temporary directory")?;
     let mount_stack = tool::mount(mount_point.path(), &boot_filesystem, &root_filesystem)?;
 
     if log_enabled!(Level::Debug) {
@@ -424,9 +427,10 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     .context("Failed to write to journald.conf")?;
 
     info!("Generating initramfs");
+    let plymouth_exists = Path::new(&mount_point.path().join("usr/bin/plymouth")).exists();
     fs::write(
         mount_point.path().join("etc/mkinitcpio.conf"),
-        initcpio::Initcpio::new(encrypted_root.is_some()).to_config()?,
+        initcpio::Initcpio::new(encrypted_root.is_some(), plymouth_exists).to_config()?,
     )
     .context("Failed to write to mkinitcpio.conf")?;
     arch_chroot
@@ -462,6 +466,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .context("Failed to write to /etc/default/grub")?;
     }
 
+    // TODO: Allow choice of bootloader - refit
     info!("Installing the Bootloader");
     arch_chroot
         .execute()

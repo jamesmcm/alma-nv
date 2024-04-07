@@ -4,6 +4,10 @@ version = "0.11.0"
 authors = ["James McMurray", "Roey Darwish Dror"]
 edition = "2021"
 
+[[bin]]
+name = "alma"
+path = "src/main.rs"
+
 [dependencies]
 which = "6"
 log = "0.4"

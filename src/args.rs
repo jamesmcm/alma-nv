@@ -43,19 +43,20 @@ pub struct CreateCommand {
     /// Path to a pacman.conf file which will be used to pacstrap packages into the image.
     ///
     /// This pacman.conf will also be copied into the resulting Arch Linux image.
-    #[clap(short = 'c', long = "pacman-conf", value_name = "pacman_conf")]
+    #[clap(short = 'c', long = "pacman-conf", value_name = "PACMAN_CONF")]
     pub pacman_conf: Option<PathBuf>,
 
     /// Additional packages to install from Pacman repos
-    #[clap(short = 'p', long = "extra-packages", value_name = "package")]
+    #[clap(short = 'p', long = "extra-packages", value_name = "PACKAGE")]
     pub extra_packages: Vec<String>,
 
     /// Additional packages to install from the AUR
-    #[clap(long = "aur-packages", value_name = "aurpackage")]
+    #[clap(long = "aur-packages", value_name = "AUR_PACKAGE")]
     pub aur_packages: Vec<String>,
 
     /// Boot partition size in megabytes
-    #[clap(long = "boot-size")]
+    // TODO: Use byte_unit
+    #[clap(long = "boot-size", value_name = "SIZE_MB")]
     pub boot_size: Option<u32>,
 
     /// Enter interactive chroot before unmounting the drive
@@ -67,11 +68,12 @@ pub struct CreateCommand {
     pub encrypted_root: bool,
 
     /// Path to preset files
-    #[clap(long = "presets", value_name = "preset")]
+    // TODO: Path to dir, zipfile, URL to zip file or git URL
+    #[clap(long = "presets", value_name = "PRESETS_PATH")]
     pub presets: Vec<PathBuf>,
 
     /// Create an image with a certain size in the given path instead of using an actual block device
-    #[clap(long = "image", value_name = "SIZE", requires = "path", value_parser = parse_bytes)]
+    #[clap(long = "image", value_name = "SIZE_WITH_UNIT", requires = "path", value_parser = parse_bytes)]
     pub image: Option<Byte>,
 
     /// Overwrite existing image files. Use with caution!

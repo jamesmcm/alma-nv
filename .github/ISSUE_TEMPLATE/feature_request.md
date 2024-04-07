@@ -7,8 +7,6 @@ assignees: ''
 
 ---
 
-<!-- Before requesting a feature, note that ALMA isn't intended to be a generic Arch Linux installer. It's an installer focused on creating mutable live environments. In addition, avoid asking for new features which can be easily implemented using the preset system -->
-
 **Is your feature request related to a problem? Please describe.**
 A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
 
