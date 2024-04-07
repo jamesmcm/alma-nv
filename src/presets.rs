@@ -16,6 +16,30 @@ pub enum PresetsPath {
     GitSSH(Url),
 }
 
+impl PresetsPath {
+    pub fn to_path(&self) -> &Path {
+        match self {
+            // if local dir / file then return that
+            PresetsPath::LocalDir(p) => p.as_path(),
+            // If local archive then extract to tmpfile dir
+            PresetsPath::LocalArchive(p) => {
+                todo!("Extract archive");
+            }
+            // If url archive then download with reqwest and extract to tmpfile dir
+            PresetsPath::UrlArchive(u) => {
+                todo!("Download and extract archive");
+            }
+            // If git then clone to tmpfile dir
+            PresetsPath::GitHttp(u) => {
+                todo!("Clone repo");
+            }
+            PresetsPath::GitSSH(u) => {
+                todo!("Clone repo");
+            }
+        }
+    }
+}
+
 impl std::str::FromStr for PresetsPath {
     type Err = String;
 
@@ -24,7 +48,7 @@ impl std::str::FromStr for PresetsPath {
         if s.starts_with("http://") || s.starts_with("https://") {
             if s.ends_with(".zip") {
                 Ok(Self::UrlArchive(Url::parse(s).map_err(|e| e.to_string())?))
-            } else if (s.ends_with(".git")) {
+            } else if s.ends_with(".git") {
                 Ok(Self::GitHttp(Url::parse(s).map_err(|e| e.to_string())?))
             } else {
                 Err(format!("Could not parse URL: {}", &s))
@@ -141,7 +165,7 @@ pub struct PresetsCollection {
 }
 
 impl PresetsCollection {
-    pub fn load(list: &[PathBuf]) -> anyhow::Result<Self> {
+    pub fn load(list: &[&Path]) -> anyhow::Result<Self> {
         let mut packages = HashSet::new();
         let mut aur_packages = HashSet::new();
         let mut scripts: Vec<Script> = Vec::new();
@@ -195,5 +219,19 @@ impl PresetsCollection {
             aur_packages,
             scripts,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_presetspath_localpath() {
+        let path = PathBuf::from_str("/path/test").unwrap();
+        let pp = PresetsPath::LocalDir(path.clone());
+        assert_eq!(pp.to_path(), path.as_path())
     }
 }

@@ -1,7 +1,7 @@
 use super::aur::AurHelper;
 use anyhow::anyhow;
 use byte_unit::Byte;
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
 
@@ -13,8 +13,8 @@ fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
     Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
 }
 
-fn parse_presets_path(src: &str) -> anyhow::Result<PresetsPath> {
-    Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
+fn parse_presets_path(path: &str) -> anyhow::Result<PresetsPath> {
+    PresetsPath::from_str(path).map_err(|e| anyhow!("{}", e))
 }
 
 #[derive(Parser, Debug)]
@@ -100,6 +100,16 @@ pub struct CreateCommand {
         ignore_case = true
     )]
     pub aur_helper: AurHelper,
+
+    // TODO: Implement
+    /// Do not ask for confirmation for any steps (for non-interactive use)
+    #[clap(long = "noconfirm")]
+    pub noconfirm: bool,
+
+    // TODO: Implement
+    /// Do not run any commands, just print them to stdfout
+    #[clap(long = "dryrun")]
+    pub dryrun: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -130,9 +140,6 @@ pub struct QemuCommand {
 
 #[cfg(test)]
 mod tests {
-
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]

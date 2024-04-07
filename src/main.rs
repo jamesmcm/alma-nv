@@ -114,7 +114,8 @@ fn select_block_device(allow_non_removable: bool) -> anyhow::Result<PathBuf> {
 /// Creates the installation
 #[allow(clippy::cognitive_complexity)] // TODO: Split steps into functions and remove this
 fn create(command: args::CreateCommand) -> anyhow::Result<()> {
-    let presets = presets::PresetsCollection::load(&command.presets)?;
+    let presets_paths: Vec<&Path> = command.presets.iter().map(|p| p.to_path()).collect();
+    let presets = presets::PresetsCollection::load(&presets_paths)?;
 
     let sgdisk = Tool::find("sgdisk")?;
     let pacstrap = Tool::find("pacstrap")?;

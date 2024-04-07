@@ -23,4 +23,4 @@ console = "0.15"
 anyhow = "1"
 strum = {version = "0.26", features = ["derive", "strum_macros"] }
 reqwest = { version = "0.12", features = ["gzip"] }
-git2 = "0.18.3"
+git2 = "0.18"
