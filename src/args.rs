@@ -5,9 +5,15 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use super::presets::PresetsPath;
+
 /// Parse size argument as bytes e.g. 10GB, 10GiB, etc.
-/// Note b is treated as bytes not bits
+/// Note b is treated as bytes not bits - but GiB vs GB difference still applies
 fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
+    Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
+}
+
+fn parse_presets_path(src: &str) -> anyhow::Result<PresetsPath> {
     Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
 }
 
@@ -67,10 +73,10 @@ pub struct CreateCommand {
     #[clap(short = 'e', long = "encrypted-root")]
     pub encrypted_root: bool,
 
-    /// Path to preset files
+    /// Paths to preset files
     // TODO: Path to dir, zipfile, URL to zip file or git URL
-    #[clap(long = "presets", value_name = "PRESETS_PATH")]
-    pub presets: Vec<PathBuf>,
+    #[clap(long = "presets", value_name = "PRESETS_PATH", value_parser = parse_presets_path)]
+    pub presets: Vec<PresetsPath>,
 
     /// Create an image with a certain size in the given path instead of using an actual block device
     #[clap(long = "image", value_name = "SIZE_WITH_UNIT", requires = "path", value_parser = parse_bytes)]

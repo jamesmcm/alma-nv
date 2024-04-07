@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use reqwest::Url;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
@@ -6,7 +7,47 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone)]
+pub enum PresetsPath {
+    LocalDir(PathBuf),
+    LocalArchive(PathBuf),
+    UrlArchive(Url),
+    GitHttp(Url),
+    GitSSH(Url),
+}
+
+impl std::str::FromStr for PresetsPath {
+    type Err = String;
+
+    // TODO: Improve error handling
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with("http://") || s.starts_with("https://") {
+            if s.ends_with(".zip") {
+                Ok(Self::UrlArchive(Url::parse(s).map_err(|e| e.to_string())?))
+            } else if (s.ends_with(".git")) {
+                Ok(Self::GitHttp(Url::parse(s).map_err(|e| e.to_string())?))
+            } else {
+                Err(format!("Could not parse URL: {}", &s))
+            }
+        } else if (s.starts_with("git@") || s.starts_with("ssh://")) && s.ends_with(".git") {
+            Ok(Self::GitSSH(Url::parse(s).map_err(|e| e.to_string())?))
+        } else {
+            // TODO: Check if valid path
+            // TODO: Improve archive detection - check MIME ?
+            if s.ends_with(".zip") {
+                Ok(Self::LocalArchive(
+                    PathBuf::from_str(s).map_err(|e| e.to_string())?,
+                ))
+            } else {
+                Ok(Self::LocalDir(
+                    PathBuf::from_str(s).map_err(|e| e.to_string())?,
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
 struct Preset {
     packages: Option<Vec<String>>,
     script: Option<String>,
