@@ -6,6 +6,8 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use tempfile::TempDir;
+use zip::ZipArchive;
 
 #[derive(Debug, Clone)]
 pub enum PresetsPath {
@@ -16,25 +18,55 @@ pub enum PresetsPath {
     GitSSH(Url),
 }
 
+pub enum PathWrapper {
+    Path(PathBuf),
+    Tmp(TempDir),
+}
+
+impl PathWrapper {
+    pub fn to_path(&self) -> &std::path::Path {
+        match self {
+            PathWrapper::Path(p) => p.as_path(),
+            PathWrapper::Tmp(t) => t.path(),
+        }
+    }
+}
+
 impl PresetsPath {
-    pub fn to_path(&self) -> &Path {
+    // Consumes the PresetsPath and retuns either a PathBuf or a TempDir
+    pub fn into_path_wrapper(self) -> anyhow::Result<PathWrapper> {
         match self {
             // if local dir / file then return that
-            PresetsPath::LocalDir(p) => p.as_path(),
+            PresetsPath::LocalDir(p) => Ok(PathWrapper::Path(p)),
             // If local archive then extract to tmpfile dir
             PresetsPath::LocalArchive(p) => {
-                todo!("Extract archive");
+                let tmpdir = tempfile::tempdir()?;
+                let f = std::fs::File::open(p)?;
+                ZipArchive::new(f)?.extract(tmpdir.path())?;
+                // TODO: Verify contents of archive
+                Ok(PathWrapper::Tmp(tmpdir))
             }
             // If url archive then download with reqwest and extract to tmpfile dir
             PresetsPath::UrlArchive(u) => {
-                todo!("Download and extract archive");
+                let resp = reqwest::blocking::Client::new().get(u).send()?;
+                let bytes = resp.bytes()?;
+                let mut zip = ZipArchive::new(std::io::Cursor::new(bytes))?;
+
+                let tmpdir = tempfile::tempdir()?;
+                zip.extract(tmpdir.path())?;
+                Ok(PathWrapper::Tmp(tmpdir))
             }
             // If git then clone to tmpfile dir
             PresetsPath::GitHttp(u) => {
-                todo!("Clone repo");
+                let tmpdir = tempfile::tempdir()?;
+                git2::Repository::clone(u.as_str(), tmpdir.path())?;
+                Ok(PathWrapper::Tmp(tmpdir))
             }
             PresetsPath::GitSSH(u) => {
-                todo!("Clone repo");
+                // TODO: Check if we need to set credentials i.e. SSH key
+                let tmpdir = tempfile::tempdir()?;
+                git2::Repository::clone(u.as_str(), tmpdir.path())?;
+                Ok(PathWrapper::Tmp(tmpdir))
             }
         }
     }
@@ -184,6 +216,7 @@ impl PresetsCollection {
                 dir_paths.sort();
 
                 for path in dir_paths {
+                    // Note any errant TOML file will cause the entire process to fail
                     Preset::load(&path)?.process(
                         &mut packages,
                         &mut scripts,
@@ -232,6 +265,12 @@ mod tests {
     fn test_presetspath_localpath() {
         let path = PathBuf::from_str("/path/test").unwrap();
         let pp = PresetsPath::LocalDir(path.clone());
-        assert_eq!(pp.to_path(), path.as_path())
+        if let PathWrapper::Path(p) = pp.clone().into_path_wrapper().unwrap() {
+            assert_eq!(p, path)
+        } else {
+            panic!("Expected PathWrapper::Path")
+        }
+
+        assert_eq!(path.as_path(), pp.into_path_wrapper().unwrap().to_path());
     }
 }

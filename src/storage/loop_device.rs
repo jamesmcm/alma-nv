@@ -10,8 +10,8 @@ pub struct LoopDevice {
 }
 
 impl LoopDevice {
-    pub fn create(file: &Path) -> anyhow::Result<Self> {
-        let losetup = Tool::find("losetup")?;
+    pub fn create(file: &Path, dryrun: bool) -> anyhow::Result<Self> {
+        let losetup = Tool::find("losetup", dryrun)?;
         let output = losetup
             .execute()
             .args(["--find", "-P", "--show"])

@@ -11,8 +11,9 @@ pub fn mount<'a>(
     mount_path: &Path,
     boot_filesystem: &'a Filesystem,
     root_filesystem: &'a Filesystem,
+    dryrun: bool,
 ) -> anyhow::Result<MountStack<'a>> {
-    let mut mount_stack = MountStack::new();
+    let mut mount_stack = MountStack::new(dryrun);
     debug!(
         "Root partition: {}",
         root_filesystem.block().path().display()

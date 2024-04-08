@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// Loads given block device in qemu
 /// Uses kvm if it is enabled
 pub fn qemu(command: args::QemuCommand) -> anyhow::Result<()> {
-    let qemu = Tool::find("qemu-system-x86_64")?;
+    let qemu = Tool::find("qemu-system-x86_64", false)?;
 
     let mut run = qemu.execute();
     run.args([

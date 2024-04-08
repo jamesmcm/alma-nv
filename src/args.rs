@@ -106,7 +106,6 @@ pub struct CreateCommand {
     #[clap(long = "noconfirm")]
     pub noconfirm: bool,
 
-    // TODO: Implement
     /// Do not run any commands, just print them to stdfout
     #[clap(long = "dryrun")]
     pub dryrun: bool,

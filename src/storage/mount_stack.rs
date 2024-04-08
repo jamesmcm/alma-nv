@@ -8,13 +8,15 @@ use std::path::PathBuf;
 pub struct MountStack<'a> {
     targets: Vec<PathBuf>,
     filesystems: PhantomData<Filesystem<'a>>,
+    dryrun: bool,
 }
 
 impl<'a> MountStack<'a> {
-    pub fn new() -> Self {
+    pub fn new(dryrun: bool) -> Self {
         MountStack {
             targets: Vec::new(),
             filesystems: PhantomData,
+            dryrun,
         }
     }
 
@@ -26,13 +28,15 @@ impl<'a> MountStack<'a> {
     ) -> nix::Result<()> {
         let source = filesystem.block().path();
         debug!("Mounting {:?} to {:?}", filesystem, target);
-        mount(
-            Some(source),
-            &target,
-            Some(filesystem.fs_type().to_mount_type()),
-            MsFlags::MS_NOATIME,
-            options,
-        )?;
+        if !self.dryrun {
+            mount(
+                Some(source),
+                &target,
+                Some(filesystem.fs_type().to_mount_type()),
+                MsFlags::MS_NOATIME,
+                options,
+            )?;
+        }
         self.targets.push(target);
         Ok(())
     }
@@ -44,13 +48,15 @@ impl<'a> MountStack<'a> {
         options: Option<&str>,
     ) -> nix::Result<()> {
         debug!("Mounting {:?} to {:?}", source, target);
-        mount::<_, _, str, _>(
-            Some(&source),
-            &target,
-            None,
-            MsFlags::MS_BIND | MsFlags::MS_NOATIME, // Read-only flag has no effect for bind mounts
-            options,
-        )?;
+        if !self.dryrun {
+            mount::<_, _, str, _>(
+                Some(&source),
+                &target,
+                None,
+                MsFlags::MS_BIND | MsFlags::MS_NOATIME, // Read-only flag has no effect for bind mounts
+                options,
+            )?;
+        }
         self.targets.push(target);
         Ok(())
     }
@@ -60,21 +66,28 @@ impl<'a> MountStack<'a> {
 
         while let Some(target) = self.targets.pop() {
             debug!("Unmounting {}", target.display());
-            if let Err(e) = umount(&target) {
-                warn!("Unable to umount {}: {}", target.display(), e);
-                result = Err(anyhow!(
-                    "Failed unmounting filesystem: {}, {}",
-                    target.display(),
-                    e
-                ));
-            };
+
+            if !self.dryrun {
+                if let Err(e) = umount(&target) {
+                    warn!("Unable to umount {}: {}", target.display(), e);
+                    result = Err(anyhow!(
+                        "Failed unmounting filesystem: {}, {}",
+                        target.display(),
+                        e
+                    ));
+                };
+            }
         }
 
         result
     }
 
     pub fn umount(mut self) -> anyhow::Result<()> {
-        self._umount()
+        if !self.dryrun {
+            self._umount()
+        } else {
+            Ok(())
+        }
     }
 }
 

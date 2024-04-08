@@ -28,6 +28,8 @@ use storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice, MountStack};
 use tempfile::tempdir;
 use tool::Tool;
 
+use crate::presets::PathWrapper;
+
 fn main() -> anyhow::Result<()> {
     // Get struct of args using clap
     let app = args::App::parse();
@@ -66,8 +68,13 @@ fn fix_fstab(fstab: &str) -> String {
 }
 
 /// Creates a file at the path provided, and mounts it to a loop device
-fn create_image(path: &Path, size: Byte, overwrite: bool) -> anyhow::Result<LoopDevice> {
-    {
+fn create_image(
+    path: &Path,
+    size: Byte,
+    overwrite: bool,
+    dryrun: bool,
+) -> anyhow::Result<LoopDevice> {
+    if !dryrun {
         let mut options = fs::OpenOptions::new();
 
         options.write(true);
@@ -82,7 +89,7 @@ fn create_image(path: &Path, size: Byte, overwrite: bool) -> anyhow::Result<Loop
             .context("Error creating the image")?;
     }
 
-    LoopDevice::create(path)
+    LoopDevice::create(path, dryrun)
 }
 
 /// Requests selection of block device (no device was given in the arguments)
@@ -114,22 +121,39 @@ fn select_block_device(allow_non_removable: bool) -> anyhow::Result<PathBuf> {
 /// Creates the installation
 #[allow(clippy::cognitive_complexity)] // TODO: Split steps into functions and remove this
 fn create(command: args::CreateCommand) -> anyhow::Result<()> {
-    let presets_paths: Vec<&Path> = command.presets.iter().map(|p| p.to_path()).collect();
-    let presets = presets::PresetsCollection::load(&presets_paths)?;
+    let presets_paths: Vec<PathWrapper> = command
+        .presets
+        .into_iter()
+        .filter_map(|p| {
+            p.into_path_wrapper()
+                .map_err(|e| {
+                    log::error!("Error reading preset: {}", e);
+                    e
+                })
+                .ok()
+        })
+        .collect();
 
-    let sgdisk = Tool::find("sgdisk")?;
-    let pacstrap = Tool::find("pacstrap")?;
-    let arch_chroot = Tool::find("arch-chroot")?;
-    let genfstab = Tool::find("genfstab")?;
-    let mkfat = Tool::find("mkfs.fat")?;
-    let mkext4 = Tool::find("mkfs.ext4")?;
+    let presets = presets::PresetsCollection::load(
+        &presets_paths
+            .iter()
+            .map(|x| x.to_path())
+            .collect::<Vec<&Path>>(),
+    )?;
+
+    let sgdisk = Tool::find("sgdisk", command.dryrun)?;
+    let pacstrap = Tool::find("pacstrap", command.dryrun)?;
+    let arch_chroot = Tool::find("arch-chroot", command.dryrun)?;
+    let genfstab = Tool::find("genfstab", command.dryrun)?;
+    let mkfat = Tool::find("mkfs.fat", command.dryrun)?;
+    let mkext4 = Tool::find("mkfs.ext4", command.dryrun)?;
     let cryptsetup = if command.encrypted_root {
-        Some(Tool::find("cryptsetup")?)
+        Some(Tool::find("cryptsetup", command.dryrun)?)
     } else {
         None
     };
     let blkid = if command.encrypted_root {
-        Some(Tool::find("blkid")?)
+        Some(Tool::find("blkid", command.dryrun)?)
     } else {
         None
     };
@@ -141,7 +165,12 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     };
 
     let image_loop = if let Some(size) = command.image {
-        Some(create_image(&storage_device_path, size, command.overwrite)?)
+        Some(create_image(
+            &storage_device_path,
+            size,
+            command.overwrite,
+            command.dryrun,
+        )?)
     } else {
         None
     };
@@ -179,7 +208,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             "--typecode=2:EF02",
         ])
         .arg(disk_path)
-        .run()
+        .run(command.dryrun)
         .context("Partitioning error")?;
 
     thread::sleep(Duration::from_millis(1000));
@@ -210,7 +239,12 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     let root_filesystem = Filesystem::format(root_partition, FilesystemType::Ext4, &mkext4)?;
 
     let mount_point = tempdir().context("Error creating a temporary directory")?;
-    let mount_stack = tool::mount(mount_point.path(), &boot_filesystem, &root_filesystem)?;
+    let mount_stack = tool::mount(
+        mount_point.path(),
+        &boot_filesystem,
+        &root_filesystem,
+        command.dryrun,
+    )?;
 
     if log_enabled!(Level::Debug) {
         debug!("lsblk:");
@@ -253,19 +287,21 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .arg(mount_point.path())
         .args(packages)
         .args(&command.extra_packages)
-        .run()
+        .run(command.dryrun)
         .context("Pacstrap error")?;
 
     // Copy pacman.conf to the image.
-    fs::copy(pacman_conf_path, mount_point.path().join("etc/pacman.conf"))
-        .context("Failed copying pacman.conf")?;
+    if !command.dryrun {
+        fs::copy(pacman_conf_path, mount_point.path().join("etc/pacman.conf"))
+            .context("Failed copying pacman.conf")?;
+    }
 
     let fstab = fix_fstab(
         &genfstab
             .execute()
             .arg("-U")
             .arg(mount_point.path())
-            .run_text_output()
+            .run_text_output(command.dryrun)
             .context("fstab error")?,
     );
     debug!("fstab:\n{}", fstab);
@@ -275,25 +311,27 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .execute()
         .arg(mount_point.path())
         .args(["passwd", "-d", "root"])
-        .run()
+        .run(command.dryrun)
         .context("Failed to delete the root password")?;
 
     info!("Setting locale");
-    fs::OpenOptions::new()
-        .append(true)
-        .open(mount_point.path().join("etc/locale.gen"))
-        .and_then(|mut locale_gen| locale_gen.write_all(b"en_US.UTF-8 UTF-8\n"))
-        .context("Failed to create locale.gen")?;
-    fs::write(
-        mount_point.path().join("etc/locale.conf"),
-        "LANG=en_US.UTF-8",
-    )
-    .context("Failed to write to locale.conf")?;
+    if !command.dryrun {
+        fs::OpenOptions::new()
+            .append(true)
+            .open(mount_point.path().join("etc/locale.gen"))
+            .and_then(|mut locale_gen| locale_gen.write_all(b"en_US.UTF-8 UTF-8\n"))
+            .context("Failed to create locale.gen")?;
+        fs::write(
+            mount_point.path().join("etc/locale.conf"),
+            "LANG=en_US.UTF-8",
+        )
+        .context("Failed to write to locale.conf")?;
+    }
     arch_chroot
         .execute()
         .arg(mount_point.path())
         .arg("locale-gen")
-        .run()
+        .run(command.dryrun)
         .context("locale-gen failed")?;
 
     info!("Installing AUR packages");
@@ -302,12 +340,14 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .execute()
         .arg(mount_point.path())
         .args(["useradd", "-m", "aur"])
-        .run()
+        .run(command.dryrun)
         .context("Failed to create temporary user to install AUR packages")?;
 
     let aur_sudoers = mount_point.path().join("etc/sudoers.d/aur");
-    fs::write(&aur_sudoers, "aur ALL=(ALL) NOPASSWD: ALL")
-        .context("Failed to modify sudoers file for AUR packages")?;
+    if !command.dryrun {
+        fs::write(&aur_sudoers, "aur ALL=(ALL) NOPASSWD: ALL")
+            .context("Failed to modify sudoers file for AUR packages")?;
+    }
 
     arch_chroot
         .execute()
@@ -320,7 +360,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             &command.aur_helper.get_package_name()
         ))
         .arg(format!("/home/aur/{}", &command.aur_helper.to_string()))
-        .run()
+        .run(command.dryrun)
         .context("Failed to clone AUR helper package")?;
 
     arch_chroot
@@ -334,7 +374,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
                 &command.aur_helper.to_string()
             ),
         ])
-        .run()
+        .run(command.dryrun)
         .context("Failed to build AUR helper")?;
 
     arch_chroot
@@ -343,7 +383,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .args(["sudo", "-u", "aur"])
         .args(&command.aur_helper.get_install_command())
         .args(aur_pacakges)
-        .run()
+        .run(command.dryrun)
         .context("Failed to install AUR packages")?;
 
     // Clean up aur user:
@@ -351,28 +391,31 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .execute()
         .arg(mount_point.path())
         .args(["userdel", "-r", "aur"])
-        .run()
+        .run(command.dryrun)
         .context("Failed to delete temporary aur user")?;
 
-    fs::remove_file(&aur_sudoers).context("Cannot delete the AUR sudoers temporary file")?;
+    if !command.dryrun {
+        fs::remove_file(&aur_sudoers).context("Cannot delete the AUR sudoers temporary file")?;
+    }
 
     if !presets.scripts.is_empty() {
         info!("Running custom scripts");
     }
 
     for script in presets.scripts {
-        let mut bind_mount_stack = MountStack::new();
+        let mut bind_mount_stack = MountStack::new(command.dryrun);
         if let Some(shared_dirs) = &script.shared_dirs {
             for dir in shared_dirs {
                 // Create shared directories mount points inside chroot
-                std::fs::create_dir_all(
-                    mount_point
-                        .path()
-                        .join(PathBuf::from("shared_dirs/"))
-                        .join(dir.file_name().expect("Dir had no filename")),
-                )
-                .context("Failed mounting shared directories in preset")?;
-
+                if !command.dryrun {
+                    std::fs::create_dir_all(
+                        mount_point
+                            .path()
+                            .join(PathBuf::from("shared_dirs/"))
+                            .join(dir.file_name().expect("Dir had no filename")),
+                    )
+                    .context("Failed mounting shared directories in preset")?;
+                }
                 // Bind mount shared directories
                 let target = mount_point
                     .path()
@@ -407,7 +450,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
                         .expect("Script path had no file name"),
                 ),
             )
-            .run()
+            .run(command.dryrun)
             .with_context(|| format!("Failed running preset script:\n{}", script.script_text))?;
     }
 
@@ -417,28 +460,32 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .execute()
         .arg(mount_point.path())
         .args(["systemctl", "enable", "NetworkManager"])
-        .run()
+        .run(command.dryrun)
         .context("Failed to enable NetworkManager")?;
 
     info!("Configuring journald");
-    fs::write(
-        mount_point.path().join("etc/systemd/journald.conf"),
-        constants::JOURNALD_CONF,
-    )
-    .context("Failed to write to journald.conf")?;
+    if !command.dryrun {
+        fs::write(
+            mount_point.path().join("etc/systemd/journald.conf"),
+            constants::JOURNALD_CONF,
+        )
+        .context("Failed to write to journald.conf")?;
+    }
 
     info!("Generating initramfs");
     let plymouth_exists = Path::new(&mount_point.path().join("usr/bin/plymouth")).exists();
-    fs::write(
-        mount_point.path().join("etc/mkinitcpio.conf"),
-        initcpio::Initcpio::new(encrypted_root.is_some(), plymouth_exists).to_config()?,
-    )
-    .context("Failed to write to mkinitcpio.conf")?;
+    if !command.dryrun {
+        fs::write(
+            mount_point.path().join("etc/mkinitcpio.conf"),
+            initcpio::Initcpio::new(encrypted_root.is_some(), plymouth_exists).to_config()?,
+        )
+        .context("Failed to write to mkinitcpio.conf")?;
+    }
     arch_chroot
         .execute()
         .arg(mount_point.path())
         .args(["mkinitcpio", "-P"])
-        .run()
+        .run(command.dryrun)
         .context("Failed to run mkinitcpio - do you have the base and linux packages installed?")?;
 
     if encrypted_root.is_some() {
@@ -449,22 +496,24 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             .execute()
             .arg(root_partition_base.path())
             .args(["-o", "value", "-s", "UUID"])
-            .run_text_output()
+            .run_text_output(command.dryrun)
             .context("Failed to run blkid")?;
         let trimmed = uuid.trim();
         debug!("Root partition UUID: {}", trimmed);
 
-        let mut grub_file = fs::OpenOptions::new()
-            .append(true)
-            .open(mount_point.path().join("etc/default/grub"))
-            .context("Failed to create /etc/default/grub")?;
+        if !command.dryrun {
+            let mut grub_file = fs::OpenOptions::new()
+                .append(true)
+                .open(mount_point.path().join("etc/default/grub"))
+                .context("Failed to create /etc/default/grub")?;
 
-        write!(
-            &mut grub_file,
-            "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={}:luks_root\"",
-            trimmed
-        )
-        .context("Failed to write to /etc/default/grub")?;
+            write!(
+                &mut grub_file,
+                "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={}:luks_root\"",
+                trimmed
+            )
+            .context("Failed to write to /etc/default/grub")?;
+        }
     }
 
     // TODO: Allow choice of bootloader - refit
@@ -474,37 +523,40 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .arg(mount_point.path())
         .args(["bash", "-c"])
         .arg(format!("grub-install --target=i386-pc --boot-directory /boot {} && grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable &&  grub-mkconfig -o /boot/grub/grub.cfg", disk_path.display()))
-        .run().context("Failed to install grub")?;
+        .run(command.dryrun).context("Failed to install grub")?;
 
     let bootloader = mount_point.path().join("boot/EFI/BOOT/BOOTX64.efi");
-    fs::rename(
-        &bootloader,
-        mount_point.path().join("boot/EFI/BOOT/grubx64.efi"),
-    )
-    .context("Cannot move out grub")?;
-    fs::copy(
-        mount_point.path().join("usr/share/shim-signed/mmx64.efi"),
-        mount_point.path().join("boot/EFI/BOOT/mmx64.efi"),
-    )
-    .context("Failed copying mmx64")?;
-    fs::copy(
-        mount_point.path().join("usr/share/shim-signed/shimx64.efi"),
-        bootloader,
-    )
-    .context("Failed copying shim")?;
 
-    debug!(
-        "GRUB configuration: {}",
-        fs::read_to_string(mount_point.path().join("boot/grub/grub.cfg"))
-            .unwrap_or_else(|e| e.to_string())
-    );
+    if !command.dryrun {
+        fs::rename(
+            &bootloader,
+            mount_point.path().join("boot/EFI/BOOT/grubx64.efi"),
+        )
+        .context("Cannot move out grub")?;
+        fs::copy(
+            mount_point.path().join("usr/share/shim-signed/mmx64.efi"),
+            mount_point.path().join("boot/EFI/BOOT/mmx64.efi"),
+        )
+        .context("Failed copying mmx64")?;
+        fs::copy(
+            mount_point.path().join("usr/share/shim-signed/shimx64.efi"),
+            bootloader,
+        )
+        .context("Failed copying shim")?;
 
-    if command.interactive {
+        debug!(
+            "GRUB configuration: {}",
+            fs::read_to_string(mount_point.path().join("boot/grub/grub.cfg"))
+                .unwrap_or_else(|e| e.to_string())
+        );
+    }
+
+    if command.interactive && !command.dryrun {
         info!("Dropping you to chroot. Do as you wish to customize the installation. Please exit by typing 'exit' instead of using Ctrl+D");
         arch_chroot
             .execute()
             .arg(mount_point.path())
-            .run()
+            .run(false)
             .context("Failed to enter interactive chroot")?;
     }
 

@@ -14,7 +14,7 @@ use tempfile::tempdir;
 /// Use arch-chroot to chroot to the given device
 /// Also handles encrypted root partitions (detected by checking for the LUKS magic header)
 pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
-    let arch_chroot = Tool::find("arch-chroot")?;
+    let arch_chroot = Tool::find("arch-chroot", false)?;
     let cryptsetup;
 
     let loop_device: Option<LoopDevice>;
@@ -23,7 +23,7 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
         {
             Ok(b) => b,
             Err(_) => {
-                loop_device = Some(LoopDevice::create(&command.block_device)?);
+                loop_device = Some(LoopDevice::create(&command.block_device, false)?);
                 storage::StorageDevice::from_path(
                     loop_device.as_ref().expect("loop device not found").path(),
                     command.allow_non_removable,
@@ -37,7 +37,7 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
 
     let root_partition_base = storage_device.get_partition(ROOT_PARTITION_INDEX)?;
     let encrypted_root = if is_encrypted_device(&root_partition_base)? {
-        cryptsetup = Some(Tool::find("cryptsetup")?);
+        cryptsetup = Some(Tool::find("cryptsetup", false)?);
         Some(EncryptedDevice::open(
             cryptsetup.as_ref().expect("cryptsetup not found"),
             &root_partition_base,
@@ -54,13 +54,18 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
     };
     let root_filesystem = Filesystem::from_partition(root_partition, FilesystemType::Ext4);
 
-    let mount_stack = mount(mount_point.path(), &boot_filesystem, &root_filesystem)?;
+    let mount_stack = mount(
+        mount_point.path(),
+        &boot_filesystem,
+        &root_filesystem,
+        false,
+    )?;
 
     arch_chroot
         .execute()
         .arg(mount_point.path())
         .args(&command.command)
-        .run()
+        .run(false)
         .with_context(|| {
             format!(
                 "Error running command in chroot: {}",

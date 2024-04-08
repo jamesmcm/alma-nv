@@ -1,15 +1,30 @@
 use anyhow::anyhow;
-use log::error;
+use log::{debug, error};
 use std::process::Command;
 use std::str;
 
 pub trait CommandExt {
-    fn run(&mut self) -> anyhow::Result<()>;
-    fn run_text_output(&mut self) -> anyhow::Result<String>;
+    fn run(&mut self, dryrun: bool) -> anyhow::Result<()>;
+    fn run_text_output(&mut self, dryrun: bool) -> anyhow::Result<String>;
 }
 
 impl CommandExt for Command {
-    fn run(&mut self) -> anyhow::Result<()> {
+    fn run(&mut self, dryrun: bool) -> anyhow::Result<()> {
+        let command_string = format!(
+            "{} {}",
+            self.get_program().to_string_lossy(),
+            self.get_args()
+                .map(|x| x.to_string_lossy().to_string())
+                .collect::<Vec<String>>()
+                .join(" ")
+        );
+        debug!("Running command: {}", command_string);
+
+        if dryrun {
+            println!("{}", command_string);
+            return Ok(());
+        }
+
         let exit_status = self.spawn()?.wait()?;
 
         if !exit_status.success() {
@@ -19,7 +34,22 @@ impl CommandExt for Command {
         Ok(())
     }
 
-    fn run_text_output(&mut self) -> anyhow::Result<String> {
+    fn run_text_output(&mut self, dryrun: bool) -> anyhow::Result<String> {
+        let command_string = format!(
+            "{} {}",
+            self.get_program().to_string_lossy(),
+            self.get_args()
+                .map(|x| x.to_string_lossy().to_string())
+                .collect::<Vec<String>>()
+                .join(" ")
+        );
+        debug!("Running command: {}", command_string);
+
+        if dryrun {
+            println!("{}", command_string);
+            return Ok(String::from(""));
+        }
+
         let output = self.output()?;
 
         if !output.status.success() {
