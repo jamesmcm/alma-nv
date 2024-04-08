@@ -13,14 +13,13 @@ use byte_unit::Byte;
 use clap::Parser;
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Select};
-use log::{debug, error, info, log_enabled, Level, LevelFilter};
+use log::{debug, info, LevelFilter};
 use process::CommandExt;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 use std::thread;
 use std::time::Duration;
 use storage::EncryptedDevice;
@@ -121,18 +120,17 @@ fn select_block_device(allow_non_removable: bool) -> anyhow::Result<PathBuf> {
 /// Creates the installation
 #[allow(clippy::cognitive_complexity)] // TODO: Split steps into functions and remove this
 fn create(command: args::CreateCommand) -> anyhow::Result<()> {
+    // We fail on any failed preset deliberately
     let presets_paths: Vec<PathWrapper> = command
         .presets
         .into_iter()
-        .filter_map(|p| {
-            p.into_path_wrapper()
-                .map_err(|e| {
-                    log::error!("Error reading preset: {}", e);
-                    e
-                })
-                .ok()
+        .map(|p| {
+            p.into_path_wrapper().map_err(|e| {
+                log::error!("Error reading preset: {}", e);
+                e
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<PathWrapper>>>()?;
 
     let presets = presets::PresetsCollection::load(
         &presets_paths

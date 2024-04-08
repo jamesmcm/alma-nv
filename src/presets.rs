@@ -15,7 +15,7 @@ pub enum PresetsPath {
     LocalArchive(PathBuf),
     UrlArchive(Url),
     GitHttp(Url),
-    GitSSH(Url),
+    GitSSH(String), // TODO: Use better type here
 }
 
 pub enum PathWrapper {
@@ -47,6 +47,7 @@ impl PresetsPath {
                 Ok(PathWrapper::Tmp(tmpdir))
             }
             // If url archive then download with reqwest and extract to tmpfile dir
+            // TODO: .tar.gz support
             PresetsPath::UrlArchive(u) => {
                 let resp = reqwest::blocking::Client::new().get(u).send()?;
                 let bytes = resp.bytes()?;
@@ -65,6 +66,8 @@ impl PresetsPath {
             PresetsPath::GitSSH(u) => {
                 // TODO: Check if we need to set credentials i.e. SSH key
                 let tmpdir = tempfile::tempdir()?;
+                //  Error reading preset: authentication required but no callback set; class=Ssh (23); code=Auth (-16)
+
                 git2::Repository::clone(u.as_str(), tmpdir.path())?;
                 Ok(PathWrapper::Tmp(tmpdir))
             }
@@ -76,6 +79,7 @@ impl std::str::FromStr for PresetsPath {
     type Err = String;
 
     // TODO: Improve error handling
+    // TODO: .tar.gz support
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("http://") || s.starts_with("https://") {
             if s.ends_with(".zip") {
@@ -86,7 +90,7 @@ impl std::str::FromStr for PresetsPath {
                 Err(format!("Could not parse URL: {}", &s))
             }
         } else if (s.starts_with("git@") || s.starts_with("ssh://")) && s.ends_with(".git") {
-            Ok(Self::GitSSH(Url::parse(s).map_err(|e| e.to_string())?))
+            Ok(Self::GitSSH(s.to_string()))
         } else {
             // TODO: Check if valid path
             // TODO: Improve archive detection - check MIME ?
