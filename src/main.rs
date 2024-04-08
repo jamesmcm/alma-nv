@@ -175,6 +175,8 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         None
     };
 
+    debug!("Creating StorageDevice");
+
     let mut storage_device = storage::StorageDevice::from_path(
         image_loop
             .as_ref()
@@ -184,10 +186,14 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             })
             .unwrap_or(&storage_device_path),
         command.allow_non_removable,
+        command.dryrun,
     )?;
 
+    debug!("Created StorageDevice");
     // TODO: Warn and prompt if unmounting, as could mean wrong disk chosen
-    storage_device.umount_if_needed();
+    if !command.dryrun {
+        storage_device.umount_if_needed();
+    }
 
     let disk_path = storage_device.path();
 
@@ -246,17 +252,17 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         command.dryrun,
     )?;
 
-    if log_enabled!(Level::Debug) {
-        debug!("lsblk:");
-        ProcessCommand::new("lsblk")
-            .arg("--fs")
-            .spawn()
-            .and_then(|mut p| p.wait())
-            .map_err(|e| {
-                error!("Error running lsblk: {}", e);
-            })
-            .ok();
-    }
+    // if log_enabled!(Level::Debug) {
+    //     debug!("lsblk:");
+    //     ProcessCommand::new("lsblk")
+    //         .arg("--fs")
+    //         .spawn()
+    //         .and_then(|mut p| p.wait())
+    //         .map_err(|e| {
+    //             error!("Error running lsblk: {}", e);
+    //         })
+    //         .ok();
+    // }
 
     let mut packages: HashSet<String> = constants::BASE_PACKAGES
         .iter()
@@ -304,9 +310,11 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
             .run_text_output(command.dryrun)
             .context("fstab error")?,
     );
-    debug!("fstab:\n{}", fstab);
-    fs::write(mount_point.path().join("etc/fstab"), fstab).context("fstab error")?;
 
+    if !command.dryrun {
+        debug!("fstab:\n{}", fstab);
+        fs::write(mount_point.path().join("etc/fstab"), fstab).context("fstab error")?;
+    };
     arch_chroot
         .execute()
         .arg(mount_point.path())
@@ -407,22 +415,20 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         if let Some(shared_dirs) = &script.shared_dirs {
             for dir in shared_dirs {
                 // Create shared directories mount points inside chroot
-                if !command.dryrun {
-                    std::fs::create_dir_all(
-                        mount_point
-                            .path()
-                            .join(PathBuf::from("shared_dirs/"))
-                            .join(dir.file_name().expect("Dir had no filename")),
-                    )
-                    .context("Failed mounting shared directories in preset")?;
-                }
-                // Bind mount shared directories
-                let target = mount_point
+                let shared_dirs_path = mount_point
                     .path()
                     .join(PathBuf::from("shared_dirs/"))
                     .join(dir.file_name().expect("Dir had no filename"));
+
+                if !command.dryrun {
+                    std::fs::create_dir_all(&shared_dirs_path)
+                        .context("Failed mounting shared directories in preset")?;
+                } else {
+                    println!("mkdir -p {}", shared_dirs_path.display());
+                }
+
                 bind_mount_stack
-                    .bind_mount(dir.clone(), target, None)
+                    .bind_mount(dir.clone(), shared_dirs_path, None)
                     .context("Failed mounting shared directories in preset")?;
             }
         }

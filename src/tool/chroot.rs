@@ -19,14 +19,14 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
 
     let loop_device: Option<LoopDevice>;
     let storage_device =
-        match storage::StorageDevice::from_path(&command.block_device, command.allow_non_removable)
+        match storage::StorageDevice::from_path(&command.block_device, command.allow_non_removable, false)
         {
             Ok(b) => b,
             Err(_) => {
                 loop_device = Some(LoopDevice::create(&command.block_device, false)?);
                 storage::StorageDevice::from_path(
                     loop_device.as_ref().expect("loop device not found").path(),
-                    command.allow_non_removable,
+                    command.allow_non_removable, false
                 )?
             }
         };

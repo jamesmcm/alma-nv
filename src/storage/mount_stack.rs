@@ -36,6 +36,14 @@ impl<'a> MountStack<'a> {
                 MsFlags::MS_NOATIME,
                 options,
             )?;
+        } else {
+            // TODO: add flags etc.
+            println!(
+                "mount {} {} -t {}",
+                source.display(),
+                target.display(),
+                filesystem.fs_type().to_mount_type()
+            );
         }
         self.targets.push(target);
         Ok(())
@@ -56,6 +64,9 @@ impl<'a> MountStack<'a> {
                 MsFlags::MS_BIND | MsFlags::MS_NOATIME, // Read-only flag has no effect for bind mounts
                 options,
             )?;
+        } else {
+            // TODO: Add flags, etc.
+            println!("mount --bind {} {}", source.display(), target.display());
         }
         self.targets.push(target);
         Ok(())
@@ -76,6 +87,8 @@ impl<'a> MountStack<'a> {
                         e
                     ));
                 };
+            } else {
+                println!("umount {}", target.display());
             }
         }
 
@@ -83,11 +96,7 @@ impl<'a> MountStack<'a> {
     }
 
     pub fn umount(mut self) -> anyhow::Result<()> {
-        if !self.dryrun {
             self._umount()
-        } else {
-            Ok(())
-        }
     }
 }
 

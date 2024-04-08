@@ -12,6 +12,7 @@ pub struct StorageDevice<'a> {
     path: PathBuf,
     origin: PhantomData<&'a dyn Origin>,
     mount_config: Vec<MountConfig>,
+    dryrun: bool,
 }
 
 #[derive(Debug)]
@@ -20,11 +21,19 @@ pub struct MountConfig {
 }
 
 impl<'a> StorageDevice<'a> {
-    pub fn from_path(path: &'a Path, allow_non_removable: bool) -> anyhow::Result<Self> {
+    pub fn from_path(
+        path: &'a Path,
+        allow_non_removable: bool,
+        dryrun: bool,
+    ) -> anyhow::Result<Self> {
         debug!("path: {:?}", path);
-        let path = path
-            .canonicalize()
-            .context("Error querying information about the block device")?;
+
+        let path = if !dryrun {
+            path.canonicalize()
+                .context("Error querying information about the block device")?
+        } else {
+            PathBuf::from(path)
+        };
         let device_name = path
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
@@ -41,11 +50,16 @@ impl<'a> StorageDevice<'a> {
             path,
             origin: PhantomData,
             mount_config,
+            dryrun,
         };
 
         // If we only allow removable/loop devices, and the device is neither removable or a loop
         // device then throw a DangerousDevice error
-        if !(allow_non_removable || _self.is_removable_device()? || _self.is_loop_device()) {
+        if !(allow_non_removable
+            || _self.is_removable_device().ok().unwrap_or(false)
+            || _self.is_loop_device()
+            || dryrun)
+        {
             return Err(anyhow!(
                 "The given block device is neither removable nor a loop device: {}",
                 _self.name
@@ -95,7 +109,7 @@ impl<'a> StorageDevice<'a> {
         path.push(name);
 
         debug!("Partition {} for {} is in {:?}", index, self.name, path);
-        if !path.exists() {
+        if !self.dryrun && !path.exists() {
             return Err(anyhow!("Partition {} does not exist", index));
         }
         Ok(Partition::new::<Self>(path))
