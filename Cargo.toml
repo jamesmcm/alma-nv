@@ -21,7 +21,11 @@ pretty_env_logger = "0.5"
 dialoguer = "0.11"
 console = "0.15"
 anyhow = "1"
-strum = {version = "0.26", features = ["derive", "strum_macros"] }
+strum = { version = "0.26", features = ["derive", "strum_macros"] }
 reqwest = { version = "0.12", features = ["gzip", "blocking"] }
 git2 = "0.18"
 zip = "0.6"
+flate2 = "1"
+tar = "0.4"
+either = "1"
+bytes = "1"

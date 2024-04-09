@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Context};
+use either::Either;
+use flate2::read::GzDecoder;
 use reqwest::Url;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -12,15 +15,53 @@ use zip::ZipArchive;
 #[derive(Debug, Clone)]
 pub enum PresetsPath {
     LocalDir(PathBuf),
-    LocalArchive(PathBuf),
-    UrlArchive(Url),
+    LocalArchive(PathBuf, ArchiveType),
+    UrlArchive(Url, ArchiveType),
     GitHttp(Url),
     GitSSH(String), // TODO: Use better type here
 }
 
+#[derive(Debug)]
 pub enum PathWrapper {
     Path(PathBuf),
     Tmp(TempDir),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ArchiveType {
+    Zip,
+    TarGz,
+}
+
+trait ReadSeek: io::Read + io::Seek {}
+impl<T> ReadSeek for T where T: io::Read + io::Seek {}
+
+impl ArchiveType {
+    pub fn extract_to_dir(
+        &self,
+        archive: Either<&Path, bytes::Bytes>,
+        dir: &Path,
+    ) -> anyhow::Result<()> {
+        let reader: Box<dyn ReadSeek> = if let Either::Left(p) = archive {
+            Box::new(std::fs::File::open(p)?)
+        } else {
+            Box::new(std::io::Cursor::new(archive.right().unwrap()))
+        };
+
+        match self {
+            ArchiveType::Zip => {
+                let mut zip = ZipArchive::new(reader)?;
+                zip.extract(dir)?;
+                Ok(())
+            }
+            ArchiveType::TarGz => {
+                let tar = GzDecoder::new(reader);
+                let mut archive_file = tar::Archive::new(tar);
+                archive_file.unpack(dir)?;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl PathWrapper {
@@ -39,22 +80,22 @@ impl PresetsPath {
             // if local dir / file then return that
             PresetsPath::LocalDir(p) => Ok(PathWrapper::Path(p)),
             // If local archive then extract to tmpfile dir
-            PresetsPath::LocalArchive(p) => {
+            PresetsPath::LocalArchive(p, archive_type) => {
                 let tmpdir = tempfile::tempdir()?;
-                let f = std::fs::File::open(p)?;
-                ZipArchive::new(f)?.extract(tmpdir.path())?;
+
+                archive_type.extract_to_dir(Either::Left(p.as_path()), tmpdir.path())?;
+
                 // TODO: Verify contents of archive
                 Ok(PathWrapper::Tmp(tmpdir))
             }
             // If url archive then download with reqwest and extract to tmpfile dir
             // TODO: .tar.gz support
-            PresetsPath::UrlArchive(u) => {
+            PresetsPath::UrlArchive(u, archive_type) => {
                 let resp = reqwest::blocking::Client::new().get(u).send()?;
                 let bytes = resp.bytes()?;
-                let mut zip = ZipArchive::new(std::io::Cursor::new(bytes))?;
-
                 let tmpdir = tempfile::tempdir()?;
-                zip.extract(tmpdir.path())?;
+
+                archive_type.extract_to_dir(Either::Right(bytes), tmpdir.path())?;
                 Ok(PathWrapper::Tmp(tmpdir))
             }
             // If git then clone to tmpfile dir
@@ -64,11 +105,73 @@ impl PresetsPath {
                 Ok(PathWrapper::Tmp(tmpdir))
             }
             PresetsPath::GitSSH(u) => {
-                // TODO: Check if we need to set credentials i.e. SSH key
-                let tmpdir = tempfile::tempdir()?;
-                //  Error reading preset: authentication required but no callback set; class=Ssh (23); code=Auth (-16)
+                // Prepare callbacks.
+                let mut callbacks = git2::RemoteCallbacks::new();
+                // TODO: Get SSH key path
 
-                git2::Repository::clone(u.as_str(), tmpdir.path())?;
+                let mut ssh_keys: Vec<DirEntry> =
+                    std::fs::read_dir(Path::new(&format!("{}/.ssh/", env::var("HOME")?)))?
+                        .filter_map(|f| {
+                            f.ok().and_then(|fi| {
+                                if fi.path().is_file()
+                                    && fi.file_name().to_string_lossy().starts_with("id")
+                                    && !fi.file_name().to_string_lossy().ends_with(".pub")
+                                {
+                                    Some(fi)
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .collect();
+
+                // TODO: Improve error handling
+                ssh_keys.sort_by(|a, b| {
+                    b.metadata()
+                        .unwrap()
+                        .modified()
+                        .unwrap()
+                        .cmp(&a.metadata().unwrap().modified().unwrap())
+                });
+
+                dbg!(&ssh_keys);
+
+                let password = dialoguer::Password::new()
+                    .with_prompt("Enter SSH key password")
+                    .allow_empty_password(true)
+                    .interact()?;
+
+                // TODO: Improve error handling
+                callbacks.credentials(move |_url, username_from_url, _allowed_types| {
+                    git2::Cred::ssh_key(
+                        username_from_url.unwrap(),
+                        None,
+                        ssh_keys
+                            .first()
+                            .context("No SSH keys found")
+                            .unwrap()
+                            .path()
+                            .as_path(),
+                        if !password.is_empty() {
+                            Some(&password)
+                        } else {
+                            None
+                        },
+                    )
+                });
+
+                // Prepare fetch options.
+                let mut fo = git2::FetchOptions::new();
+                fo.remote_callbacks(callbacks);
+
+                // Prepare builder.
+                let mut builder = git2::build::RepoBuilder::new();
+                builder.fetch_options(fo);
+
+                let tmpdir = tempfile::tempdir()?;
+                // Clone the project.
+                builder.clone(u.as_str(), tmpdir.path())?;
+
                 Ok(PathWrapper::Tmp(tmpdir))
             }
         }
@@ -83,7 +186,15 @@ impl std::str::FromStr for PresetsPath {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("http://") || s.starts_with("https://") {
             if s.ends_with(".zip") {
-                Ok(Self::UrlArchive(Url::parse(s).map_err(|e| e.to_string())?))
+                Ok(Self::UrlArchive(
+                    Url::parse(s).map_err(|e| e.to_string())?,
+                    ArchiveType::Zip,
+                ))
+            } else if s.ends_with(".tar.gz") {
+                Ok(Self::UrlArchive(
+                    Url::parse(s).map_err(|e| e.to_string())?,
+                    ArchiveType::TarGz,
+                ))
             } else if s.ends_with(".git") {
                 Ok(Self::GitHttp(Url::parse(s).map_err(|e| e.to_string())?))
             } else {
@@ -97,6 +208,12 @@ impl std::str::FromStr for PresetsPath {
             if s.ends_with(".zip") {
                 Ok(Self::LocalArchive(
                     PathBuf::from_str(s).map_err(|e| e.to_string())?,
+                    ArchiveType::Zip,
+                ))
+            } else if s.ends_with(".tar.gz") {
+                Ok(Self::LocalArchive(
+                    PathBuf::from_str(s).map_err(|e| e.to_string())?,
+                    ArchiveType::TarGz,
                 ))
             } else {
                 Ok(Self::LocalDir(
