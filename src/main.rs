@@ -144,6 +144,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     let arch_chroot = Tool::find("arch-chroot", command.dryrun)?;
     let genfstab = Tool::find("genfstab", command.dryrun)?;
     let mkfat = Tool::find("mkfs.fat", command.dryrun)?;
+    // TODO: btrfs support
     let mkext4 = Tool::find("mkfs.ext4", command.dryrun)?;
     let cryptsetup = if command.encrypted_root {
         Some(Tool::find("cryptsetup", command.dryrun)?)
@@ -188,6 +189,8 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     )?;
 
     debug!("Created StorageDevice");
+
+    // TODO: Skip all below if partition given (not reformatting)
     // TODO: Warn and prompt if unmounting, as could mean wrong disk chosen
     if !command.dryrun {
         storage_device.umount_if_needed();
@@ -242,6 +245,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
 
     let root_filesystem = Filesystem::format(root_partition, FilesystemType::Ext4, &mkext4)?;
 
+    // TODO: If given partitions then read in here - do we need boot_partition?
     let mount_point = tempdir().context("Error creating a temporary directory")?;
     let mount_stack = tool::mount(
         mount_point.path(),
@@ -406,6 +410,15 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
 
     if !presets.scripts.is_empty() {
         info!("Running custom scripts");
+    }
+
+    // Recursively copy preset scripts to the chroot mount in /usr/share/alma/presets/{preset_index}/
+    let options = fs_extra::dir::CopyOptions::new().copy_inside(true);
+    for (i, path) in presets_paths.iter().enumerate() {
+        let target = mount_point
+            .path()
+            .join(format!("usr/share/alma/presets/{}/", i));
+        fs_extra::copy_items(&[path.to_path()], target, &options)?;
     }
 
     for script in presets.scripts {

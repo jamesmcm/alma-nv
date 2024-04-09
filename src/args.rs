@@ -46,6 +46,21 @@ pub struct CreateCommand {
     #[clap()]
     pub path: Option<PathBuf>, // If not present then user is prompted interactively
 
+    // TODO: implement
+    /// Path to a partition to use as the target partition - this will reformat the partition to ext4
+    /// Should be used when you do not want to repartition and wipe the entire disk (e.g. dual-booting or install on to a disk with existing partitions)
+    /// If it is not set, then the entire disk will be repartitioned and wiped
+    /// If it is set, but --boot-partition is not, then the partition will be mounted as / and /boot will not be modified
+    #[clap(long = "target-partition")]
+    pub target_partition: Option<PathBuf>,
+
+    // TODO: implement
+    /// Path to a partition to use as the target boot partition - this will reformat the partition to fat32 and install GRUB
+    /// Should be set with --target-partition to also install GRUB
+    /// If it is not set, but --target-partition is, then no bootloader will be installed (/boot will not be modified)
+    #[clap(long = "target-partition")]
+    pub boot_partition: Option<PathBuf>,
+
     /// Path to a pacman.conf file which will be used to pacstrap packages into the image.
     ///
     /// This pacman.conf will also be copied into the resulting Arch Linux image.
