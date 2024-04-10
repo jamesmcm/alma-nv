@@ -1,6 +1,7 @@
 mod args;
 mod aur;
 mod constants;
+mod create;
 mod initcpio;
 mod presets;
 mod process;
@@ -20,14 +21,15 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 use storage::EncryptedDevice;
 use storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice, MountStack};
 use tempfile::tempdir;
 use tool::Tool;
 
+use crate::create::{setup_bootloader, DiskPartitions};
 use crate::presets::PathWrapper;
+use crate::storage::partition::Partition;
+use crate::storage::StorageDevice;
 
 fn main() -> anyhow::Result<()> {
     // Get struct of args using clap
@@ -146,6 +148,10 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     let mkfat = Tool::find("mkfs.fat", command.dryrun)?;
     // TODO: btrfs support
     let mkext4 = Tool::find("mkfs.ext4", command.dryrun)?;
+
+    // TODO: Support separate home partition and encryption of only that
+    // https://wiki.archlinux.org/title/dm-crypt/Encrypting_a_non-root_file_system
+
     let cryptsetup = if command.encrypted_root {
         Some(Tool::find("cryptsetup", command.dryrun)?)
     } else {
@@ -175,7 +181,6 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     };
 
     debug!("Creating StorageDevice");
-
     let mut storage_device = storage::StorageDevice::from_path(
         image_loop
             .as_ref()
@@ -187,44 +192,35 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         command.allow_non_removable,
         command.dryrun,
     )?;
-
     debug!("Created StorageDevice");
 
-    // TODO: Skip all below if partition given (not reformatting)
     // TODO: Warn and prompt if unmounting, as could mean wrong disk chosen
     if !command.dryrun {
         storage_device.umount_if_needed();
     }
+    let boot_size = command.boot_size.unwrap_or(500);
 
-    let disk_path = storage_device.path();
+    let (boot_partition, root_partition_base) =
+        if let Some(root_partition_path) = command.root_partition {
+            let root_partition_base = Partition::new::<StorageDevice>(root_partition_path);
+            (
+                command.boot_partition.map(Partition::new::<StorageDevice>),
+                root_partition_base,
+            )
+        } else {
+            let DiskPartitions {
+                boot_partition,
+                root_partition_base,
+            } = create::repartition_disk(&storage_device, boot_size, &sgdisk, command.dryrun)?;
 
-    info!("Partitioning the block device");
-    debug!("{:?}", disk_path);
+            (Some(boot_partition), root_partition_base)
+        };
 
-    let boot_size = command.boot_size.unwrap_or(300);
+    let boot_filesystem: Option<Filesystem> = boot_partition
+        .as_ref()
+        .map(|bp| Filesystem::format(bp, FilesystemType::Vfat, &mkfat))
+        .transpose()?;
 
-    sgdisk
-        .execute()
-        .args([
-            "-Z",
-            "-o",
-            &format!("--new=1::+{}M", boot_size),
-            "--new=2::+1M",
-            "--largest-new=3",
-            "--typecode=1:EF00",
-            "--typecode=2:EF02",
-        ])
-        .arg(disk_path)
-        .run(command.dryrun)
-        .context("Partitioning error")?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    info!("Formatting filesystems");
-    let boot_partition = storage_device.get_partition(constants::BOOT_PARTITION_INDEX)?;
-    let boot_filesystem = Filesystem::format(&boot_partition, FilesystemType::Vfat, &mkfat)?;
-
-    let root_partition_base = storage_device.get_partition(constants::ROOT_PARTITION_INDEX)?;
     let encrypted_root = if let Some(cryptsetup) = &cryptsetup {
         info!("Encrypting the root filesystem");
         EncryptedDevice::prepare(cryptsetup, &root_partition_base)?;
@@ -489,84 +485,15 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .context("Failed to write to journald.conf")?;
     }
 
-    info!("Generating initramfs");
-    let plymouth_exists = Path::new(&mount_point.path().join("usr/bin/plymouth")).exists();
-    if !command.dryrun {
-        fs::write(
-            mount_point.path().join("etc/mkinitcpio.conf"),
-            initcpio::Initcpio::new(encrypted_root.is_some(), plymouth_exists).to_config()?,
-        )
-        .context("Failed to write to mkinitcpio.conf")?;
-    }
-    arch_chroot
-        .execute()
-        .arg(mount_point.path())
-        .args(["mkinitcpio", "-P"])
-        .run(command.dryrun)
-        .context("Failed to run mkinitcpio - do you have the base and linux packages installed?")?;
-
-    if encrypted_root.is_some() {
-        debug!("Setting up GRUB for an encrypted root partition");
-
-        let uuid = blkid
-            .expect("No tool for blkid")
-            .execute()
-            .arg(root_partition_base.path())
-            .args(["-o", "value", "-s", "UUID"])
-            .run_text_output(command.dryrun)
-            .context("Failed to run blkid")?;
-        let trimmed = uuid.trim();
-        debug!("Root partition UUID: {}", trimmed);
-
-        if !command.dryrun {
-            let mut grub_file = fs::OpenOptions::new()
-                .append(true)
-                .open(mount_point.path().join("etc/default/grub"))
-                .context("Failed to create /etc/default/grub")?;
-
-            write!(
-                &mut grub_file,
-                "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={}:luks_root\"",
-                trimmed
-            )
-            .context("Failed to write to /etc/default/grub")?;
-        }
-    }
-
-    // TODO: Allow choice of bootloader - refit
-    info!("Installing the Bootloader");
-    arch_chroot
-        .execute()
-        .arg(mount_point.path())
-        .args(["bash", "-c"])
-        .arg(format!("grub-install --target=i386-pc --boot-directory /boot {} && grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable &&  grub-mkconfig -o /boot/grub/grub.cfg", disk_path.display()))
-        .run(command.dryrun).context("Failed to install grub")?;
-
-    let bootloader = mount_point.path().join("boot/EFI/BOOT/BOOTX64.efi");
-
-    if !command.dryrun {
-        fs::rename(
-            &bootloader,
-            mount_point.path().join("boot/EFI/BOOT/grubx64.efi"),
-        )
-        .context("Cannot move out grub")?;
-        fs::copy(
-            mount_point.path().join("usr/share/shim-signed/mmx64.efi"),
-            mount_point.path().join("boot/EFI/BOOT/mmx64.efi"),
-        )
-        .context("Failed copying mmx64")?;
-        fs::copy(
-            mount_point.path().join("usr/share/shim-signed/shimx64.efi"),
-            bootloader,
-        )
-        .context("Failed copying shim")?;
-
-        debug!(
-            "GRUB configuration: {}",
-            fs::read_to_string(mount_point.path().join("boot/grub/grub.cfg"))
-                .unwrap_or_else(|e| e.to_string())
-        );
-    }
+    setup_bootloader(
+        &storage_device,
+        &mount_point,
+        &arch_chroot,
+        encrypted_root.as_ref(),
+        &root_partition_base,
+        blkid.as_ref(),
+        command.dryrun,
+    )?;
 
     if command.interactive && !command.dryrun {
         info!("Dropping you to chroot. Do as you wish to customize the installation. Please exit by typing 'exit' instead of using Ctrl+D");

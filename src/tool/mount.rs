@@ -9,7 +9,7 @@ use std::path::Path;
 /// Note we mount with noatime to reduce disk writes by not recording file access times
 pub fn mount<'a>(
     mount_path: &Path,
-    boot_filesystem: &'a Filesystem,
+    boot_filesystem: &'a Option<Filesystem>,
     root_filesystem: &'a Filesystem,
     dryrun: bool,
 ) -> anyhow::Result<MountStack<'a>> {
@@ -24,14 +24,17 @@ pub fn mount<'a>(
         .mount(root_filesystem, mount_path.into(), None)
         .with_context(|| format!("Error mounting filesystem to {}", mount_path.display()))?;
 
-    let boot_point = mount_path.join("boot");
-    if !boot_point.exists() {
-        fs::create_dir(&boot_point).context("Error creating the boot directory")?;
-    }
+    // Mounts boot partition to /boot if given
+    if let Some(boot_sys) = boot_filesystem {
+        let boot_point = mount_path.join("boot");
+        if !boot_point.exists() {
+            fs::create_dir(&boot_point).context("Error creating the boot directory")?;
+        }
 
-    mount_stack
-        .mount(boot_filesystem, boot_point, None)
-        .context("Error mounting the boot point")?;
+        mount_stack
+            .mount(boot_sys, boot_point, None)
+            .context("Error mounting the boot point")?;
+    }
 
     Ok(mount_stack)
 }

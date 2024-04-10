@@ -18,20 +18,24 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
     let cryptsetup;
 
     let loop_device: Option<LoopDevice>;
-    let storage_device =
-        match storage::StorageDevice::from_path(&command.block_device, command.allow_non_removable, false)
-        {
-            Ok(b) => b,
-            Err(_) => {
-                loop_device = Some(LoopDevice::create(&command.block_device, false)?);
-                storage::StorageDevice::from_path(
-                    loop_device.as_ref().expect("loop device not found").path(),
-                    command.allow_non_removable, false
-                )?
-            }
-        };
+    let storage_device = match storage::StorageDevice::from_path(
+        &command.block_device,
+        command.allow_non_removable,
+        false,
+    ) {
+        Ok(b) => b,
+        Err(_) => {
+            loop_device = Some(LoopDevice::create(&command.block_device, false)?);
+            storage::StorageDevice::from_path(
+                loop_device.as_ref().expect("loop device not found").path(),
+                command.allow_non_removable,
+                false,
+            )?
+        }
+    };
     let mount_point = tempdir().context("Error creating a temporary directory")?;
 
+    // TODO: Here we assume fixed indexes for boot and root partitions - may not be the case for custom partitions
     let boot_partition = storage_device.get_partition(BOOT_PARTITION_INDEX)?;
     let boot_filesystem = Filesystem::from_partition(&boot_partition, FilesystemType::Vfat);
 
@@ -54,12 +58,8 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
     };
     let root_filesystem = Filesystem::from_partition(root_partition, FilesystemType::Ext4);
 
-    let mount_stack = mount(
-        mount_point.path(),
-        &boot_filesystem,
-        &root_filesystem,
-        false,
-    )?;
+    let boot_sys = Some(boot_filesystem);
+    let mount_stack = mount(mount_point.path(), &boot_sys, &root_filesystem, false)?;
 
     arch_chroot
         .execute()

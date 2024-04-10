@@ -43,22 +43,22 @@ pub enum Command {
 #[derive(Parser, Debug)]
 pub struct CreateCommand {
     /// Either a path to a removable block device or a nonexisting file if --image is specified
-    #[clap()]
+    #[clap(value_name = "BLOCK_DEVICE | IMAGE")]
     pub path: Option<PathBuf>, // If not present then user is prompted interactively
 
-    // TODO: implement
-    /// Path to a partition to use as the target partition - this will reformat the partition to ext4
+    /// Path to a partition to use as the target root partition - this will reformat the partition to ext4
     /// Should be used when you do not want to repartition and wipe the entire disk (e.g. dual-booting or install on to a disk with existing partitions)
     /// If it is not set, then the entire disk will be repartitioned and wiped
     /// If it is set, but --boot-partition is not, then the partition will be mounted as / and /boot will not be modified
-    #[clap(long = "target-partition")]
-    pub target_partition: Option<PathBuf>,
+    #[clap(long = "root-partition", value_name = "ROOT_PARTITION_PATH")]
+    pub root_partition: Option<PathBuf>,
 
-    // TODO: implement
-    /// Path to a partition to use as the target boot partition - this will reformat the partition to fat32 and install GRUB
+    // TODO: Add support for separate home partition too?
+
+    /// Path to a partition to use as the target boot partition - this will reformat the partition to vfat and install GRUB
     /// Should be set with --target-partition to also install GRUB
     /// If it is not set, but --target-partition is, then no bootloader will be installed (/boot will not be modified)
-    #[clap(long = "target-partition")]
+    #[clap(long = "boot-partition", value_name = "BOOT_PARTITION_PATH")]
     pub boot_partition: Option<PathBuf>,
 
     /// Path to a pacman.conf file which will be used to pacstrap packages into the image.

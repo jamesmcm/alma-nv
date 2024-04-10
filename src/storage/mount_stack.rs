@@ -96,7 +96,7 @@ impl<'a> MountStack<'a> {
     }
 
     pub fn umount(mut self) -> anyhow::Result<()> {
-            self._umount()
+        self._umount()
     }
 }
 

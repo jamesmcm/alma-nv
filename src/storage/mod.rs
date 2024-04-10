@@ -3,7 +3,7 @@ mod filesystem;
 mod loop_device;
 mod markers;
 mod mount_stack;
-mod partition;
+pub mod partition;
 mod removeable_devices;
 mod storage_device;
 
