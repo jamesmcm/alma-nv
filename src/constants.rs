@@ -7,6 +7,7 @@ Storage=volatile
 SystemMaxUse=16M
 ";
 
+// TODO: Get linux kernel version from the system - support Manjaro
 pub const BASE_PACKAGES: [&str; 9] = [
     "base",
     "linux",

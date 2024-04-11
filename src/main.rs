@@ -146,7 +146,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     let arch_chroot = Tool::find("arch-chroot", command.dryrun)?;
     let genfstab = Tool::find("genfstab", command.dryrun)?;
     let mkfat = Tool::find("mkfs.fat", command.dryrun)?;
-    // TODO: btrfs support
+    // TODO: btrfs, bcachefs support
     let mkext4 = Tool::find("mkfs.ext4", command.dryrun)?;
 
     // TODO: Support separate home partition and encryption of only that
@@ -198,7 +198,7 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     if !command.dryrun {
         storage_device.umount_if_needed();
     }
-    let boot_size = command.boot_size.unwrap_or(500);
+    let boot_size = command.boot_size.unwrap_or(300);
 
     let (boot_partition, root_partition_base) =
         if let Some(root_partition_path) = command.root_partition {
