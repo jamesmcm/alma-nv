@@ -201,10 +201,13 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
     let boot_size = command.boot_size.unwrap_or(300);
 
     let (boot_partition, root_partition_base) =
-        if let Some(root_partition_path) = command.root_partition {
+        if let Some(root_partition_path) = command.root_partition.clone() {
             let root_partition_base = Partition::new::<StorageDevice>(root_partition_path);
             (
-                command.boot_partition.map(Partition::new::<StorageDevice>),
+                command
+                    .boot_partition
+                    .clone()
+                    .map(Partition::new::<StorageDevice>),
                 root_partition_base,
             )
         } else {
@@ -485,15 +488,18 @@ fn create(command: args::CreateCommand) -> anyhow::Result<()> {
         .context("Failed to write to journald.conf")?;
     }
 
-    setup_bootloader(
-        &storage_device,
-        &mount_point,
-        &arch_chroot,
-        encrypted_root.as_ref(),
-        &root_partition_base,
-        blkid.as_ref(),
-        command.dryrun,
-    )?;
+    // Only set up bootloader if boot partition is mounted
+    if command.root_partition.is_none() || command.boot_partition.is_some() {
+        setup_bootloader(
+            &storage_device,
+            &mount_point,
+            &arch_chroot,
+            encrypted_root.as_ref(),
+            &root_partition_base,
+            blkid.as_ref(),
+            command.dryrun,
+        )?;
+    }
 
     if command.interactive && !command.dryrun {
         info!("Dropping you to chroot. Do as you wish to customize the installation. Please exit by typing 'exit' instead of using Ctrl+D");

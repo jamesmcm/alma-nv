@@ -104,6 +104,7 @@ pub fn setup_bootloader(
                 .open(mount_point.path().join("etc/default/grub"))
                 .context("Failed to create /etc/default/grub")?;
 
+            // TODO: Handle multiple encrypted partitions with osprober?
             write!(
                 &mut grub_file,
                 "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={}:luks_root\"",
@@ -113,7 +114,9 @@ pub fn setup_bootloader(
         }
     }
 
-    // TODO: Allow choice of bootloader - refit
+    // TODO: add grub os-prober?
+    // TODO: Allow choice of bootloader - systemd-boot + refind?
+    // TODO: Add systemd volatile root option
     info!("Installing the Bootloader");
     arch_chroot
         .execute()

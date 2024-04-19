@@ -54,7 +54,6 @@ pub struct CreateCommand {
     pub root_partition: Option<PathBuf>,
 
     // TODO: Add support for separate home partition too?
-
     /// Path to a partition to use as the target boot partition - this will reformat the partition to vfat and install GRUB
     /// Should be set with --target-partition to also install GRUB
     /// If it is not set, but --target-partition is, then no bootloader will be installed (/boot will not be modified)
