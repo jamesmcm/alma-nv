@@ -1,11 +1,11 @@
-use super::mount;
 use super::Tool;
+use super::mount;
 use crate::args;
 use crate::constants::{BOOT_PARTITION_INDEX, ROOT_PARTITION_INDEX};
 use crate::process::CommandExt;
 use crate::storage;
-use crate::storage::{is_encrypted_device, EncryptedDevice};
 use crate::storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice};
+use crate::storage::{EncryptedDevice, is_encrypted_device};
 use anyhow::Context;
 use log::info;
 

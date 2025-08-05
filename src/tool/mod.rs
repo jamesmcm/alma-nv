@@ -20,7 +20,7 @@ pub struct Tool {
 impl Tool {
     pub fn find(name: &'static str, dryrun: bool) -> anyhow::Result<Self> {
         Ok(Self {
-            exec: which(name).context(format!("Cannot find {}", name))?,
+            exec: which(name).context(format!("Cannot find {name}"))?,
             dryrun,
         })
     }

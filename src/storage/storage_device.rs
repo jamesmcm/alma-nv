@@ -1,6 +1,6 @@
 use super::markers::{BlockDevice, Origin};
 use super::partition::Partition;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use log::debug;
 use std::fs::read_to_string;
 use std::marker::PhantomData;
@@ -26,7 +26,7 @@ impl<'a> StorageDevice<'a> {
         allow_non_removable: bool,
         dryrun: bool,
     ) -> anyhow::Result<Self> {
-        debug!("path: {:?}", path);
+        debug!("path: {path:?}");
 
         let path = if !dryrun {
             path.canonicalize()
@@ -40,7 +40,7 @@ impl<'a> StorageDevice<'a> {
             .map(String::from)
             .ok_or_else(|| anyhow!("Invalid device name: {}", path.display()))?;
 
-        debug!("real path: {:?}, device name: {:?}", path, device_name);
+        debug!("real path: {path:?}, device name: {device_name:?}");
 
         let path_as_str = path.to_str().context("Unable to get the path as &str ")?;
         let mount_config = Self::get_mount_point(path_as_str)?;
@@ -79,10 +79,10 @@ impl<'a> StorageDevice<'a> {
         let mut path = self.sys_path();
         path.push("removable");
 
-        debug!("Reading: {:?}", path);
+        debug!("Reading: {path:?}");
         let result =
             read_to_string(&path).context("Error querying information about the block device")?;
-        debug!("{:?} -> {}", path, result);
+        debug!("{path:?} -> {result}");
 
         Ok(result == "1\n")
     }
@@ -118,9 +118,18 @@ impl<'a> StorageDevice<'a> {
     pub fn umount_if_needed(&mut self) {
         for config in &self.mount_config {
             debug!("Unmounting {:?}", config.mount_point);
-            let _ = nix::mount::umount(&config.mount_point);
+            if !self.dryrun {
+                // Ignore result, as we're just trying to clean up
+                let _ = nix::mount::umount(&config.mount_point);
+            } else {
+                println!("umount {}", config.mount_point.display());
+            }
         }
         self.mount_config = vec![]
+    }
+
+    pub fn is_mounted(&self) -> bool {
+        !self.mount_config.is_empty()
     }
 
     // Code from @assapir - can we do this without manually reading mounts file?

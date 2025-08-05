@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use either::Either;
 use flate2::read::GzDecoder;
 use reqwest::Url;
@@ -75,7 +75,7 @@ impl PathWrapper {
 
 impl PresetsPath {
     // Consumes the PresetsPath and retuns either a PathBuf or a TempDir
-    pub fn into_path_wrapper(self) -> anyhow::Result<PathWrapper> {
+    pub fn into_path_wrapper(self, noconfirm: bool) -> anyhow::Result<PathWrapper> {
         match self {
             // if local dir / file then return that
             PresetsPath::LocalDir(p) => Ok(PathWrapper::Path(p)),
@@ -89,7 +89,6 @@ impl PresetsPath {
                 Ok(PathWrapper::Tmp(tmpdir))
             }
             // If url archive then download with reqwest and extract to tmpfile dir
-            // TODO: .tar.gz support
             PresetsPath::UrlArchive(u, archive_type) => {
                 let resp = reqwest::blocking::Client::new().get(u).send()?;
                 let bytes = resp.bytes()?;
@@ -136,22 +135,32 @@ impl PresetsPath {
 
                 dbg!(&ssh_keys);
 
-                let password = dialoguer::Password::new()
-                    .with_prompt("Enter SSH key password")
-                    .allow_empty_password(true)
-                    .interact()?;
+                let password = if noconfirm {
+                    String::new()
+                } else {
+                    dialoguer::Password::new()
+                        .with_prompt("Enter SSH key password")
+                        .allow_empty_password(true)
+                        .interact()?
+                };
 
                 // TODO: Improve error handling
                 callbacks.credentials(move |_url, username_from_url, _allowed_types| {
+                    let username = username_from_url.ok_or_else(|| {
+                        git2::Error::from_str("SSH URL does not contain a username")
+                    })?;
+                    let key_path = match ssh_keys.first() {
+                        Some(entry) => entry.path(),
+                        None => {
+                            return Err(git2::Error::from_str(
+                                "No suitable SSH keys found in ~/.ssh/",
+                            ));
+                        }
+                    };
                     git2::Cred::ssh_key(
-                        username_from_url.unwrap(),
+                        username,
                         None,
-                        ssh_keys
-                            .first()
-                            .context("No SSH keys found")
-                            .unwrap()
-                            .path()
-                            .as_path(),
+                        &key_path,
                         if !password.is_empty() {
                             Some(&password)
                         } else {
@@ -182,7 +191,6 @@ impl std::str::FromStr for PresetsPath {
     type Err = String;
 
     // TODO: Improve error handling
-    // TODO: .tar.gz support
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("http://") || s.starts_with("https://") {
             if s.ends_with(".zip") {
@@ -386,12 +394,15 @@ mod tests {
     fn test_presetspath_localpath() {
         let path = PathBuf::from_str("/path/test").unwrap();
         let pp = PresetsPath::LocalDir(path.clone());
-        if let PathWrapper::Path(p) = pp.clone().into_path_wrapper().unwrap() {
+        if let PathWrapper::Path(p) = pp.clone().into_path_wrapper(false).unwrap() {
             assert_eq!(p, path)
         } else {
             panic!("Expected PathWrapper::Path")
         }
 
-        assert_eq!(path.as_path(), pp.into_path_wrapper().unwrap().to_path());
+        assert_eq!(
+            path.as_path(),
+            pp.into_path_wrapper(false).unwrap().to_path()
+        );
     }
 }

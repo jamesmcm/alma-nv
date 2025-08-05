@@ -12,177 +12,192 @@ Linux into a USB or an SD card, almost as if it was a hard drive. Some configura
 order to minimize writes to the USB and making sure the system is bootable on both BIOS and UEFI
 systems.
 
-Upgrading your packages is as easy as running `pacman -Syu` (or [Topgrade](https://github.com/r-darwish/topgrade/)) while the system is
-booted. This tool also provides an easy chroot command, so you can keep your live environment up to
-date without having to boot it. Encrypting the root partition is as easy as providing the `-e` flag
+Upgrading your packages is as easy as running `pacman -Syu` while the system is booted. This tool also provides an easy chroot command, so you can keep your live environment up to date without having to boot it. Encrypting the root partition is as easy as providing the `-e` flag.
 
 ## Installation
 
-You can either build the project using cargo build or install the `alma` package from AUR.
+You can either build the project using `cargo build --release` or install the `alma-nv`, `alma-nv-git` or `alma-nv-bin` package from the AUR.
 
 ### Using Arch Linux derivatives
 
-Using Arch Linux derivatives, such as Manjaro, isn't supported it ALMA. It may work and may not. Please do not open bugs or feature 
-requests if you are not using the official Arch Linux.
+Using Arch Linux derivatives, such as Manjaro, isn't supported by ALMA. It may work and may not. Please do not open bugs or feature
+requests if you are not using an official Arch Linux installation as your host system.
 
 ## Usage
 
-### Image creation on removable device
-``` shell
+### Wiping a Device and Creating a New Installation
+```bash
 sudo alma create /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
 ```
+This command will wipe the entire disk and create a fresh, bootable installation of Arch Linux. You can use either removable devices or loop devices. As a precaution, ALMA will not wipe non-removable devices unless you explicitly allow it with `--allow-non-removable`.
 
-This will wipe the entire disk and create a bootable installation of Arch Linux. You can use either
-removable devices or loop devices. As a precaution, ALMA will not wipe non-removable devices.
+If you do not specify a device path, ALMA will interactively prompt you to select one from a list of available removable devices.
 
-Not specifying any path will cause ALMA to interactively prompt the user for a removable device.
+### Installing to Pre-existing Partitions
+ALMA can also install to a partition you've already created, which is useful for dual-booting or custom disk layouts.
 
-### Disk encryption
+```bash
+# Install to /dev/sdX5, but DO NOT install a bootloader
+sudo alma create --root-partition /dev/sdX5
 
-You can enable disk encryption with the `-e` flag:
-
-``` shell
-sudo alma create -e  /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
+# Install to /dev/sdX5 and install a bootloader to the EFI partition at /dev/sdX1
+sudo alma create --root-partition /dev/sdX5 --boot-partition /dev/sdX1
 ```
+**Warning:** The partition specified with `--root-partition` will be **reformatted to ext4**, deleting all its contents.
 
+### Disk Encryption
+You can enable full disk encryption (LUKS) for the root partition with the `-e` flag:
+```bash
+sudo alma create -e /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
+```
 You will be prompted to enter and confirm the encryption passphrase during image creation.
 
-### chroot
+### Creating a Raw Image File
+For development and testing, it can be useful to generate a raw image file instead of writing to a physical device.
+```bash
+# Create a 10GiB raw image file named almatest.img
+sudo alma create --image 10GiB almatest.img
+```
 
-After the installation is done you can either boot from it immediately or use `arch-chroot` to
-perform further customizations before your first boot (e.g. installing wireless device drivers).
-
-You can run `arch-chroot` via ALMA:
-
-``` shell
+### Chrooting into an Installation
+After the installation is done, you can `chroot` into the environment to perform further customizations before the first boot.
+```bash
 sudo alma chroot /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
 ```
 
-### Create raw image and boot in qemu
+### Booting in QEMU
+You can easily boot a device or image file in QEMU for testing.
+```bash
+# First, find the loop device for your image
+sudo losetup -fP --show almatest.img
+# It will print something like /dev/loop0
 
-For development and testing it may be useful to generate and boot the image in qemu.
-
-Creating a 10GiB raw image, with disk encryption:
-
-``` shell
-sudo alma create -e --image 10GiB almatest.img
-```
-
-If you receive the following error:
-```
-Error setting up a loop device: losetup: cannot find an unused loop device
-```
-
-Check that you are running ALMA with sudo privileges, and reboot if you have installed a kernel update since your last reboot.
-
-Mounting the raw image to a loop device:
-
-``` shell
-sudo losetup -f ./almatest.img
-```
-
-Check loop device:
-``` shell
- sudo losetup -j ./almatest.img
-```
-```
-/dev/loop0: [2070]:6865917 (/path/to/image/almatest.img)
-```
-Note that your loop device number may differ.
-
-Run qemu via ALMA:
-``` shell
+# Then boot it
 sudo alma qemu /dev/loop0
 ```
 
-This will boot the image in qemu.
-
 ## Presets
 
-Reproducing a build can be easily done using a preset file.
+Reproducing a build can be easily done using preset files. Presets are powerful TOML files that let you define packages to install, scripts to run, and more.
+
+You can specify presets from a local file, a directory, a remote URL, or a Git repository.
+```bash
+# Use a local preset file and a directory of presets
+sudo ALMA_USER=archie alma create --presets ./user.toml ./presets/
+
+# Clone a git repository over HTTPS and use its presets
+sudo alma create --presets https://github.com/user/my-alma-presets.git
+
+# Download and extract a zip file of presets
+sudo alma create --presets https://example.com/presets.zip
+```
 
 Preset files are simple TOML files which contain:
-* A list of packages to install: `packages = ["mypackage"]`
-* A post-installation script: `script = """ ... """`
-* Environment variables required by the preset (e.g. used in the script): `enironment_variables = ["USERNAME"]`
-* A list of shared directories `shared_directories = ["subdirectory"]` - where subdirectory would be available at `/shared_dirs/subdirectory/` for use in the script of the preset.
+*   A list of packages to install: `packages = ["mypackage"]`
+*   A list of AUR packages to install: `aur_packages = ["cool-app-git"]`
+*   A post-installation script: `script = """ ... """`
+*   Environment variables required by the preset: `environment_variables = ["USERNAME"]`
+*   A list of shared directories from the host to be made available inside the chroot: `shared_directories = ["configs"]`
 
-See the presets directory for examples.
-
-Presets are used via the `--presets` argument (multiple preset files or directories may be provided):
-
-``` shell
-sudo ALMA_USER=archie alma create /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0 --presets ./presets/user.toml ./presets/custom_preset.toml
+If a directory is provided, all `.toml` files within it are recursively crawled and executed in alphanumeric order. This allows you to structure complex installations, for example:
 ```
-
-Preset scripts are executed in the same order they are provided.
-
-If a directory is provided, then all files and subdirectories in the directory are recursively crawled in alphanumeric order (all files must be ALMA .toml files). This allows you to use the following structure to compose many scripts in a specific order:
-
-```
-.
+my_presets/
 ├── 00-add_user.toml
-├── 01-xorg
-│   ├── 00-install.toml
-│   └── 01-config.toml
-└── 02-i3
+├── 10-xorg/
+│   ├── 00-install.toml
+│   └── 01-config.toml
+└── 20-i3/
     ├── 00-install.toml
     └── 01-copy_dotfiles.toml
 ```
 
-Example preset TOML:
+### Order of Execution
+ALMA installs packages and runs preset scripts in the following order:
+1.  All non-AUR packages from all presets are collected and installed in a single `pacstrap` command.
+2.  If any preset requests AUR packages, an AUR helper (like `paru` or `yay`) is installed.
+3.  All AUR packages from all presets are collected and installed using the AUR helper.
+4.  Preset scripts are executed one by one, in the alphanumeric order of their filenames.
 
-``` toml
-packages = ["sudo"]
-script = """
-set -eux
-useradd -m ${ALMA_USER}
-passwd ${ALMA_USER}
-usermod -G wheel -a ${ALMA_USER}
-echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
-"""
-environment_variables = ["ALMA_USER"]
+## Full Command-Line Reference
 ```
+USAGE:
+    alma create [OPTIONS] [BLOCK_DEVICE | IMAGE]
 
-Note that shared directories in the preset scripts are mounted as bind mounts, so they are *not* mounted read-only. Any changes the custom script makes to the shared directory will be carried out in the preset shared directory of the host system, so be sure to copy (not move) files from the shared directories.
+ARGS:
+    <BLOCK_DEVICE | IMAGE>
+            Either a path to a removable block device or a nonexisting file if --image is
+            specified
 
-### Order of execution
+OPTIONS:
+    -h, --help
+            Print help information
 
-ALMA installs the packages and presets in the following order:
+    -v, --verbose
+            Verbose output
 
-1. All non-AUR packages are installed
-2. If AUR packages are present in the toml files, yay (or another
-   specified AUR helper) is installed
-3. All AUR packages are installed.
-4. Preset scripts are executed according to their filenames in
-   alphanumeric order.
+    --root-partition <ROOT_PARTITION_PATH>
+            Path to a partition to use as the target root partition - this will reformat the
+            partition to ext4
 
-Note this may mean you have to workaround some package installations if
-they depend on preset scripts.
+    --boot-partition <BOOT_PARTITION_PATH>
+            Path to a partition to use as the target boot partition - this will reformat the
+            partition to vfat and install GRUB
 
-For example, at the moment you cannot install Rust-based AUR packages in
-the `aur_packages` array of the Preset TOMLs if you use rustup,
-since rustup needs to be given the toolchain to
-install first. This can be worked around by carrying out the AUR
-package installation inside the preset script itself in these cases.
+    -c, --pacman-conf <PACMAN_CONF>
+            Path to a pacman.conf file which will be used to pacstrap packages into the image
+
+    -p, --extra-packages <PACKAGE>...
+            Additional packages to install from Pacman repos
+
+    --aur-packages <AUR_PACKAGE>...
+            Additional packages to install from the AUR
+
+    --boot-size <SIZE_WITH_UNIT>
+            Boot partition size. If a raw number is given, it is treated as MiB
+            [default: 300MiB]
+
+    -i, --interactive
+            Enter interactive chroot before unmounting the drive
+
+    -e, --encrypted-root
+            Encrypt the root partition
+
+    --presets <PRESETS_PATH>...
+            Paths to preset files or directories (local, http(s) zip/tar.gz, or git repository)
+
+    --image <SIZE_WITH_UNIT>
+            Create an image with a certain size in the given path instead of using an actual
+            block device
+
+    --overwrite
+            Overwrite existing image files. Use with caution!
+
+    --allow-non-removable
+            Allow installation on non-removable devices. Use with extreme caution!
+
+    --aur-helper <AUR_HELPER>
+            The AUR helper to install for handling AUR packages
+            [default: paru] [possible values: paru, yay]
+
+    --noconfirm
+            Do not ask for confirmation for any steps (for non-interactive use)
+
+    --dryrun
+            Do not run any commands, just print them to stdfout
+```
 
 ## Troubleshooting
 ### mkinitcpio: /etc/mkinitcpio.d/linux.preset: No such file or directory
+Ensure you have both the `linux` and `base` packages installed on your host system.
 
-Ensure you have both the `linux` and `base` packages installed. Note
-that only Arch Linux is supported, not Arch Linux derivatives such as
-Manjaro.
+### losetup: cannot find an unused loop device
+Check that you are running ALMA with `sudo` privileges, and reboot if you have installed a kernel update since your last reboot.
 
 ### Problem opening /dev/... for reading! Error is 123.
+This can sometimes happen on disks with unusual partition tables. Delete all partitions on the disk first (e.g., with `gparted` or `fdisk`) and try again.
 
-Delete all partitions on the disk first (e.g. with gparted) and try
-again.
-
-## Similar projects
-
+## Similar Projects
 * [NomadBSD](http://nomadbsd.org/)
 
 ## Useful Resources
-
 * [Arch Wiki: Installing Arch Linux on a USB key](https://wiki.archlinux.org/index.php/Install_Arch_Linux_on_a_USB_key)
-* [ValleyCat's Arch Linux USB guide](http://valleycat.org/linux/arch-usb.html?i=1)
