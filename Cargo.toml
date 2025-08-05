@@ -1,20 +1,38 @@
 [package]
+name = "alma-nv"
+description = "Create Arch Linux based bootable USB drives"
+version = "0.11.0"
+authors = ["James McMurray <jamesmcm03@gmail.com>", "Roey Darwish Dror (original ALMA, now archived)"]
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/jamesmcm/alma-nv"
+homepage = "https://github.com/jamesmcm/alma-nv"
+readme = "README.md"
+keywords = ["archlinux", "linux", "archlinux-installer", "live-usb"]
+
+[[bin]]
 name = "alma"
-version = "0.10.0"
-authors = ["Roey Darwish Dror"]
-edition = "2018"
+path = "src/main.rs"
 
 [dependencies]
-which = "4"
+which = "8"
 log = "0.4"
-structopt = "0.3"
+clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
-toml = "0.5"
-byte-unit = "4.0"
-nix = "0.19"
-env_logger = "0.8"
-pretty_env_logger = "0.4"
-dialoguer = "0.7"
-console = "0.13"
+toml = "0.9"
+byte-unit = "5"
+nix = { version = "0.30", features = ["mount"] }
+pretty_env_logger = "0.5"
+dialoguer = "0.11"
+console = "0.16"
 anyhow = "1"
+strum = { version = "0.27", features = ["derive", "strum_macros"] }
+reqwest = { version = "0.12", features = ["gzip", "blocking"] }
+git2 = "0.20"
+zip = "4"
+flate2 = "1"
+tar = "0.4"
+either = "1"
+bytes = "1"
+fs_extra = "1"

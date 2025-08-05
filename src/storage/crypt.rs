@@ -27,7 +27,7 @@ impl<'t, 'o> EncryptedDevice<'t, 'o> {
             .arg("luksFormat")
             .arg("-q")
             .arg(device.path())
-            .run()
+            .run(cryptsetup.dryrun)
             .context("Error setting up an encrypted device")?;
 
         Ok(())
@@ -48,7 +48,7 @@ impl<'t, 'o> EncryptedDevice<'t, 'o> {
             .arg("open")
             .arg(device.path())
             .arg(&name)
-            .run()
+            .run(cryptsetup.dryrun)
             .context("Error opening the encrypted device")?;
 
         let path = PathBuf::from("/dev/mapper").join(&name);
@@ -66,7 +66,7 @@ impl<'t, 'o> EncryptedDevice<'t, 'o> {
             .execute()
             .arg("close")
             .arg(&self.name)
-            .run()
+            .run(self.cryptsetup.dryrun)
             .context("Error closing the encrypted device")?;
 
         Ok(())

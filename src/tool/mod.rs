@@ -14,12 +14,14 @@ use which::which;
 #[derive(Debug)]
 pub struct Tool {
     exec: PathBuf,
+    pub dryrun: bool,
 }
 
 impl Tool {
-    pub fn find(name: &'static str) -> anyhow::Result<Self> {
+    pub fn find(name: &'static str, dryrun: bool) -> anyhow::Result<Self> {
         Ok(Self {
-            exec: which(name).context(format!("Cannot find {}", name))?,
+            exec: which(name).context(format!("Cannot find {name}"))?,
+            dryrun,
         })
     }
 

@@ -1,5 +1,5 @@
-use crate::tool::Tool;
-use anyhow::{anyhow, Context};
+use crate::{process::CommandExt, tool::Tool};
+use anyhow::Context;
 use log::info;
 use std::path::{Path, PathBuf};
 
@@ -7,30 +7,31 @@ use std::path::{Path, PathBuf};
 pub struct LoopDevice {
     path: PathBuf,
     losetup: Tool,
+    dryrun: bool,
 }
 
 impl LoopDevice {
-    pub fn create(file: &Path) -> anyhow::Result<Self> {
-        let losetup = Tool::find("losetup")?;
+    pub fn create(file: &Path, dryrun: bool) -> anyhow::Result<Self> {
+        let losetup = Tool::find("losetup", dryrun)?;
         let output = losetup
             .execute()
-            .args(&["--find", "-P", "--show"])
+            .args(["--find", "-P", "--show"])
             .arg(file)
-            .output()
+            .run_text_output(dryrun)
             .context("Error creating the image")?;
 
-        if !output.status.success() {
-            return Err(anyhow!(String::from_utf8(output.stderr)?));
-        }
-
-        let path = PathBuf::from(
-            String::from_utf8(output.stdout)
-                .context("Output not valid UTF-8")?
-                .trim(),
-        );
+        let path = if dryrun {
+            PathBuf::from("/dev/loop1337")
+        } else {
+            PathBuf::from(output.trim())
+        };
         info!("Mounted {} to {}", file.display(), path.display());
 
-        Ok(Self { path, losetup })
+        Ok(Self {
+            path,
+            losetup,
+            dryrun,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -45,9 +46,7 @@ impl Drop for LoopDevice {
             .execute()
             .arg("-d")
             .arg(&self.path)
-            .spawn()
-            .expect("Failed to spawn command to detach loop device")
-            .wait()
+            .run(self.dryrun)
             .ok();
     }
 }

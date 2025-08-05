@@ -3,11 +3,11 @@ mod filesystem;
 mod loop_device;
 mod markers;
 mod mount_stack;
-mod partition;
+pub mod partition;
 mod removeable_devices;
 mod storage_device;
 
-pub use crypt::{is_encrypted_device, EncryptedDevice};
+pub use crypt::{EncryptedDevice, is_encrypted_device};
 pub use filesystem::{Filesystem, FilesystemType};
 pub use loop_device::LoopDevice;
 pub use markers::BlockDevice;

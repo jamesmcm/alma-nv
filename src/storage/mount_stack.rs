@@ -1,20 +1,22 @@
 use super::Filesystem;
 use anyhow::anyhow;
 use log::{debug, warn};
-use nix::mount::{mount, umount, MsFlags};
+use nix::mount::{MsFlags, mount, umount};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
 pub struct MountStack<'a> {
     targets: Vec<PathBuf>,
     filesystems: PhantomData<Filesystem<'a>>,
+    dryrun: bool,
 }
 
 impl<'a> MountStack<'a> {
-    pub fn new() -> Self {
+    pub fn new(dryrun: bool) -> Self {
         MountStack {
             targets: Vec::new(),
             filesystems: PhantomData,
+            dryrun,
         }
     }
 
@@ -25,14 +27,24 @@ impl<'a> MountStack<'a> {
         options: Option<&str>,
     ) -> nix::Result<()> {
         let source = filesystem.block().path();
-        debug!("Mounting {:?} to {:?}", filesystem, target);
-        mount(
-            Some(source),
-            &target,
-            Some(filesystem.fs_type().to_mount_type()),
-            MsFlags::MS_NOATIME,
-            options,
-        )?;
+        debug!("Mounting {filesystem:?} to {target:?}");
+        if !self.dryrun {
+            mount(
+                Some(source),
+                &target,
+                Some(filesystem.fs_type().to_mount_type()),
+                MsFlags::MS_NOATIME,
+                options,
+            )?;
+        } else {
+            // TODO: add flags etc.
+            println!(
+                "mount {} {} -t {}",
+                source.display(),
+                target.display(),
+                filesystem.fs_type().to_mount_type()
+            );
+        }
         self.targets.push(target);
         Ok(())
     }
@@ -43,14 +55,19 @@ impl<'a> MountStack<'a> {
         target: PathBuf,
         options: Option<&str>,
     ) -> nix::Result<()> {
-        debug!("Mounting {:?} to {:?}", source, target);
-        mount::<_, _, str, _>(
-            Some(&source),
-            &target,
-            None,
-            MsFlags::MS_BIND | MsFlags::MS_NOATIME, // Read-only flag has no effect for bind mounts
-            options,
-        )?;
+        debug!("Mounting {source:?} to {target:?}");
+        if !self.dryrun {
+            mount::<_, _, str, _>(
+                Some(&source),
+                &target,
+                None,
+                MsFlags::MS_BIND | MsFlags::MS_NOATIME, // Read-only flag has no effect for bind mounts
+                options,
+            )?;
+        } else {
+            // TODO: Add flags, etc.
+            println!("mount --bind {} {}", source.display(), target.display());
+        }
         self.targets.push(target);
         Ok(())
     }
@@ -60,14 +77,19 @@ impl<'a> MountStack<'a> {
 
         while let Some(target) = self.targets.pop() {
             debug!("Unmounting {}", target.display());
-            if let Err(e) = umount(&target) {
-                warn!("Unable to umount {}: {}", target.display(), e);
-                result = Err(anyhow!(
-                    "Failed unmounting filesystem: {}, {}",
-                    target.display(),
-                    e
-                ));
-            };
+
+            if !self.dryrun {
+                if let Err(e) = umount(&target) {
+                    warn!("Unable to umount {}: {}", target.display(), e);
+                    result = Err(anyhow!(
+                        "Failed unmounting filesystem: {}, {}",
+                        target.display(),
+                        e
+                    ));
+                };
+            } else {
+                println!("umount {}", target.display());
+            }
         }
 
         result

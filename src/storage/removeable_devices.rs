@@ -17,7 +17,7 @@ impl fmt::Display for Device {
             "{} {} ({})",
             self.vendor,
             self.model,
-            self.size.get_appropriate_unit(true)
+            self.size.get_appropriate_unit(byte_unit::UnitType::Binary)
         )
     }
 }
@@ -60,14 +60,15 @@ pub fn get_storage_devices(allow_non_removable: bool) -> anyhow::Result<Vec<Devi
             vendor: fs::read_to_string(entry.path().join("device/vendor"))
                 .map(trimmed)
                 .context("Error querying storage devices")?,
-            size: Byte::from_bytes(
+            size: Byte::from_u128(
                 fs::read_to_string(entry.path().join("size"))
                     .context("Error querying storage devices")?
                     .trim()
                     .parse::<u128>()
                     .context("Could not parse block size to unsigned integer (u128)")?
                     * 512,
-            ),
+            )
+            .context("Block size u128 too large")?, // TODO: Improve error message
         });
     }
 
@@ -81,6 +82,6 @@ mod tests {
     #[test]
     fn sanity() {
         let devices = get_storage_devices(false).expect("No devices");
-        println!("{:?}", devices);
+        println!("{devices:?}");
     }
 }

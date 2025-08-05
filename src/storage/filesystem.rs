@@ -35,7 +35,9 @@ impl<'a> Filesystem<'a> {
             FilesystemType::Vfat => command.arg("-F32").arg(block.path()),
         };
 
-        command.run().context("Error formatting filesystem")?;
+        command
+            .run(mkfs.dryrun)
+            .context("Error formatting filesystem")?;
 
         Ok(Self { fs_type, block })
     }

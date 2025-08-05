@@ -7,9 +7,6 @@ assignees: ''
 
 ---
 
-<!-- Please do not open bug reports if you're using Manjaro.
-ALMA does not support Manjaro. If it works then have fun, but if it doesn't then I won't fix it -->
-
 **Describe the bug** 
 A clear and concise description of what the bug is.
 
