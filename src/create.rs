@@ -9,7 +9,7 @@ use std::io::Write;
 use crate::{
     constants, initcpio,
     process::CommandExt,
-    storage::{partition::Partition, BlockDevice, EncryptedDevice, StorageDevice},
+    storage::{BlockDevice, EncryptedDevice, StorageDevice, partition::Partition},
     tool::Tool,
 };
 
@@ -27,14 +27,14 @@ pub fn repartition_disk<'a>(
     let disk_path = storage_device.path();
 
     info!("Partitioning the block device");
-    debug!("{:?}", disk_path);
+    debug!("{disk_path:?}");
 
     sgdisk
         .execute()
         .args([
             "-Z",
             "-o",
-            &format!("--new=1::+{}M", boot_size_mb),
+            &format!("--new=1::+{boot_size_mb}M"),
             "--new=2::+1M",
             "--largest-new=3",
             "--typecode=1:EF00",
@@ -46,6 +46,7 @@ pub fn repartition_disk<'a>(
 
     thread::sleep(Duration::from_millis(1000));
 
+    // TODO: Will this use of constant indices work for custom partitions
     info!("Formatting filesystems");
     let boot_partition = storage_device.get_partition(constants::BOOT_PARTITION_INDEX)?;
     let root_partition_base = storage_device.get_partition(constants::ROOT_PARTITION_INDEX)?;
@@ -96,7 +97,7 @@ pub fn setup_bootloader(
             .run_text_output(dryrun)
             .context("Failed to run blkid")?;
         let trimmed = uuid.trim();
-        debug!("Root partition UUID: {}", trimmed);
+        debug!("Root partition UUID: {trimmed}");
 
         if !dryrun {
             let mut grub_file = fs::OpenOptions::new()
@@ -107,8 +108,7 @@ pub fn setup_bootloader(
             // TODO: Handle multiple encrypted partitions with osprober?
             write!(
                 &mut grub_file,
-                "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={}:luks_root\"",
-                trimmed
+                "GRUB_CMDLINE_LINUX=\"cryptdevice=UUID={trimmed}:luks_root\""
             )
             .context("Failed to write to /etc/default/grub")?;
         }

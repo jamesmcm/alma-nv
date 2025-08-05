@@ -18,10 +18,10 @@ impl CommandExt for Command {
                 .collect::<Vec<String>>()
                 .join(" ")
         );
-        debug!("Running command: {}", command_string);
+        debug!("Running command: {command_string}");
 
         if dryrun {
-            println!("{}", command_string);
+            println!("{command_string}");
             return Ok(());
         }
 
@@ -43,10 +43,10 @@ impl CommandExt for Command {
                 .collect::<Vec<String>>()
                 .join(" ")
         );
-        debug!("Running command: {}", command_string);
+        debug!("Running command: {command_string}");
 
         if dryrun {
-            println!("{}", command_string);
+            println!("{command_string}");
             return Ok(String::from(""));
         }
 
@@ -54,7 +54,7 @@ impl CommandExt for Command {
 
         if !output.status.success() {
             let error = str::from_utf8(&output.stderr).unwrap_or("[INVALID UTF8]");
-            error!("{}", error);
+            error!("{error}");
             return Err(anyhow!("Bad exit code: {}", output.status));
         }
 

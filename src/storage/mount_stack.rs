@@ -1,7 +1,7 @@
 use super::Filesystem;
 use anyhow::anyhow;
 use log::{debug, warn};
-use nix::mount::{mount, umount, MsFlags};
+use nix::mount::{MsFlags, mount, umount};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
@@ -27,7 +27,7 @@ impl<'a> MountStack<'a> {
         options: Option<&str>,
     ) -> nix::Result<()> {
         let source = filesystem.block().path();
-        debug!("Mounting {:?} to {:?}", filesystem, target);
+        debug!("Mounting {filesystem:?} to {target:?}");
         if !self.dryrun {
             mount(
                 Some(source),
@@ -55,7 +55,7 @@ impl<'a> MountStack<'a> {
         target: PathBuf,
         options: Option<&str>,
     ) -> nix::Result<()> {
-        debug!("Mounting {:?} to {:?}", source, target);
+        debug!("Mounting {source:?} to {target:?}");
         if !self.dryrun {
             mount::<_, _, str, _>(
                 Some(&source),

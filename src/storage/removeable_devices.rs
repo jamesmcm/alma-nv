@@ -82,6 +82,6 @@ mod tests {
     #[test]
     fn sanity() {
         let devices = get_storage_devices(false).expect("No devices");
-        println!("{:?}", devices);
+        println!("{devices:?}");
     }
 }

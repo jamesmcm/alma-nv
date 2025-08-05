@@ -8,8 +8,19 @@ use clap::Parser;
 use super::presets::PresetsPath;
 
 /// Parse size argument as bytes e.g. 10GB, 10GiB, etc.
-/// Note b is treated as bytes not bits - but GiB vs GB difference still applies
+/// If a raw number is given, it is treated as MiB.
 fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
+    // If the input is just a number, treat it as MiB
+    if let Ok(val) = src.parse::<u128>() {
+        let mib_in_bytes = val * 1024 * 1024;
+        return Byte::from_u128(mib_in_bytes).ok_or_else(|| {
+            anyhow!(
+                "Invalid image size: raw number {} is too large to represent as bytes",
+                val
+            )
+        });
+    }
+    // Otherwise, parse it as a string with units (e.g., "500GiB")
     Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
 }
 
@@ -17,7 +28,7 @@ fn parse_presets_path(path: &str) -> anyhow::Result<PresetsPath> {
     PresetsPath::from_str(path).map_err(|e| anyhow!("{}", e))
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[clap(name = "alma", about = "Arch Linux Mobile Appliance", version, author)]
 pub struct App {
     /// Verbose output
@@ -28,7 +39,7 @@ pub struct App {
     pub cmd: Command,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub enum Command {
     #[clap(name = "create", about = "Create a new Arch Linux USB")]
     Create(CreateCommand),
@@ -40,7 +51,7 @@ pub enum Command {
     Qemu(QemuCommand),
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct CreateCommand {
     /// Either a path to a removable block device or a nonexisting file if --image is specified
     #[clap(value_name = "BLOCK_DEVICE | IMAGE")]
@@ -54,9 +65,9 @@ pub struct CreateCommand {
     pub root_partition: Option<PathBuf>,
 
     // TODO: Add support for separate home partition too?
-    /// Path to a partition to use as the target boot partition - this will reformat the partition to vfat and install GRUB
-    /// Should be set with --target-partition to also install GRUB
-    /// If it is not set, but --target-partition is, then no bootloader will be installed (/boot will not be modified)
+    /// Path to a partition to use as the target boot partition - this will reformat the partition to vfat and install GRUB.
+    /// Should be used with --root-partition if you want to install a bootloader to a pre-partitioned disk.
+    /// If --root-partition is set, but this is not, then no bootloader will be installed.
     #[clap(long = "boot-partition", value_name = "BOOT_PARTITION_PATH")]
     pub boot_partition: Option<PathBuf>,
 
@@ -74,10 +85,10 @@ pub struct CreateCommand {
     #[clap(long = "aur-packages", value_name = "AUR_PACKAGE")]
     pub aur_packages: Vec<String>,
 
-    /// Boot partition size in megabytes
-    // TODO: Use byte_unit
-    #[clap(long = "boot-size", value_name = "SIZE_MB")]
-    pub boot_size: Option<u32>,
+    /// Boot partition size. If a raw number is given, it is treated as MiB.
+    /// [default: 300MiB]
+    #[clap(long = "boot-size", value_name = "SIZE_WITH_UNIT", value_parser = parse_bytes)]
+    pub boot_size: Option<Byte>,
 
     /// Enter interactive chroot before unmounting the drive
     #[clap(short = 'i', long = "interactive")]
@@ -87,8 +98,7 @@ pub struct CreateCommand {
     #[clap(short = 'e', long = "encrypted-root")]
     pub encrypted_root: bool,
 
-    /// Paths to preset files
-    // TODO: Path to dir, zipfile, URL to zip file or git URL
+    /// Paths to preset files or directories (local, http(s) zip/tar.gz, or git repository)
     #[clap(long = "presets", value_name = "PRESETS_PATH", value_parser = parse_presets_path)]
     pub presets: Vec<PresetsPath>,
 
@@ -107,15 +117,15 @@ pub struct CreateCommand {
     #[clap(long = "allow-non-removable")]
     pub allow_non_removable: bool,
 
+    /// The AUR helper to install for handling AUR packages.
     #[clap(
         value_enum,
         long = "aur-helper",
-        default_value = "paru",
+        default_value_t = AurHelper::Paru,
         ignore_case = true
     )]
     pub aur_helper: AurHelper,
 
-    // TODO: Implement
     /// Do not ask for confirmation for any steps (for non-interactive use)
     #[clap(long = "noconfirm")]
     pub noconfirm: bool,
@@ -125,7 +135,7 @@ pub struct CreateCommand {
     pub dryrun: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct ChrootCommand {
     /// Path starting with /dev/disk/by-id for the USB drive
     #[clap()]
@@ -140,7 +150,7 @@ pub struct ChrootCommand {
     pub command: Vec<String>,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct QemuCommand {
     /// Path starting with /dev/disk/by-id for the USB drive
     #[clap()]
@@ -161,7 +171,7 @@ mod tests {
             App::try_parse_from(vec!["alma-nv", "create", "--image", "500MiB", "/path/test"]);
         match app_parse {
             Err(e) => {
-                println!("{}", e);
+                println!("{e}");
                 panic!("arg parsing failed");
             }
             Ok(app) => {
@@ -186,7 +196,7 @@ mod tests {
             App::try_parse_from(vec!["alma-nv", "create", "--image", "500mb", "/path/test"]);
         match app_parse {
             Err(e) => {
-                println!("{}", e);
+                println!("{e}");
                 panic!("arg parsing failed");
             }
             Ok(app) => {
@@ -198,6 +208,33 @@ mod tests {
                         Some(Byte::from_i128_with_unit(500, byte_unit::Unit::MB).unwrap())
                     );
                     assert_eq!(cmd.path, Some(path));
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_byte_parsing_no_unit() {
+        let app_parse = App::try_parse_from(vec![
+            "alma-nv",
+            "create",
+            "--boot-size",
+            "500",
+            "/path/test",
+        ]);
+        match app_parse {
+            Err(e) => {
+                println!("{e}");
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    assert_eq!(
+                        cmd.boot_size,
+                        Some(Byte::from_u128(500 * 1024 * 1024).unwrap())
+                    );
                 } else {
                     panic!("was not Create command")
                 }
