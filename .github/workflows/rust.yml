@@ -7,22 +7,22 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-jobs:
+jobs: 
   quickcheck:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.rustversion.outputs.rustversion }}
+      version: ${{ steps.rustversion.outputs.version }}
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - run: cargo check
     - run: cargo pkgid
     - run: 'echo "$(cargo pkgid | cut -d# -f2)"'
     - id: rustversion
-      run: 'echo "::set-output name=rustversion::$(cargo pkgid | cut -d# -f2)"'
+      run: 'echo "version=$(cargo pkgid | cut -d# -f2)" >> $GITHUB_OUTPUT'
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Install Clippy
       run: rustup component add clippy rustfmt
     - id: cargoversion
@@ -38,7 +38,7 @@ jobs:
     - name: Build
       run: cargo build --verbose --release
     - name: Upload alma-nv Artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: x86_64-gcc
         path: ./target/release/alma
@@ -47,14 +47,14 @@ jobs:
     runs-on: ubuntu-latest
     name: Amd64StaticBinaries
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: StaticBinaryBuild
       id: amd64staticbuild
       uses: jamesmcm/cargo-deb-amd64-ubuntu@master
       with:
         cmd: cargo build --release --target=x86_64-unknown-linux-musl
     - name: Upload alma-nv Artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: x86_64-musl
         path: ./target/x86_64-unknown-linux-musl/release/alma
@@ -62,7 +62,7 @@ jobs:
     needs: [quickcheck, build, amd64binaries]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -71,10 +71,10 @@ jobs:
         with:
           tag_name: '${{ needs.quickcheck.outputs.version }}'
           release_name: alma-nv ${{ needs.quickcheck.outputs.version }}
-          body: 'Changelog:'
+          body: 'Change Me'
           draft: true
           prerelease: false
-      - uses: actions/download-artifact@v2
+      - uses: actions/download-artifact@v4
       - run: ls -lha
       - run: ls -lha x86_64-musl
       - run: ls -lha x86_64-gcc
@@ -86,4 +86,13 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./x86_64-gcc/alma
           asset_name: 'alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_gcc'
+          asset_content_type: application/octet-stream
+      - name: Upload Amd64 Static Binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./x86_64-musl/alma
+          asset_name: 'alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_musl'
           asset_content_type: application/octet-stream
