@@ -67,8 +67,15 @@ sudo alma chroot /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
 
 ### Booting in QEMU
 You can easily boot a device or image file in QEMU for testing.
+
+Note you will need to install `qemu-desktop`, `qemu-system-x86` and `qemu-system-x86-firmware`.
+
 ```bash
-# First, find the loop device for your image
+sudo pacman -S qemu-desktop qemu-system-x86 qemu-system-x86-firmware
+```
+
+```bash
+# First, mount a loop device for your image
 sudo losetup -fP --show almatest.img
 # It will print something like /dev/loop0
 
