@@ -122,7 +122,12 @@ pub fn setup_bootloader(
         .execute()
         .arg(mount_point.path())
         .args(["bash", "-c"])
-        .arg(format!("grub-install --target=i386-pc --boot-directory /boot {} && grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable &&  grub-mkconfig -o /boot/grub/grub.cfg", disk_path.display()))
+        .arg(format!(
+            "grub-install --target=i386-pc --boot-directory /boot {0} && \
+             grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable {0} && \
+             grub-mkconfig -o /boot/grub/grub.cfg",
+            disk_path.display()
+        ))
         .run(dryrun).context("Failed to install grub")?;
 
     let bootloader = mount_point.path().join("boot/EFI/BOOT/BOOTX64.efi");
