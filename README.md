@@ -16,7 +16,7 @@ Upgrading your packages is as easy as running `pacman -Syu` while the system is 
 
 ## Installation
 
-You can either build the project using `cargo build --release` or install the `alma-nv`, `alma-nv-git` or `alma-nv-bin` package from the AUR.
+You can either build the project using `cargo build --release` or install the `alma`, `alma-git` or `alma-bin` package from the AUR.
 
 ### Using Arch Linux derivatives
 
