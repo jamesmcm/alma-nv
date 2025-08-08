@@ -1,6 +1,10 @@
 pub const BOOT_PARTITION_INDEX: u8 = 1;
 pub const ROOT_PARTITION_INDEX: u8 = 3;
 
+pub const MIN_BOOT_MB: u32 = 200;
+pub const DEFAULT_BOOT_MB: u32 = 300;
+pub const MAX_BOOT_MB: u32 = 2048; // 2GiB
+
 pub static JOURNALD_CONF: &str = "
 [Journal]
 Storage=volatile
