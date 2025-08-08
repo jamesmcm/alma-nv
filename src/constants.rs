@@ -7,17 +7,58 @@ Storage=volatile
 SystemMaxUse=16M
 ";
 
-// TODO: Get linux kernel version from the system - support Manjaro
-pub const BASE_PACKAGES: [&str; 9] = [
+// Base packages for all installations
+pub const BASE_PACKAGES: [&str; 11] = [
     "base",
     "linux",
     "linux-firmware",
     "grub",
     "efibootmgr",
     "intel-ucode",
+    "amd-ucode",
     "networkmanager",
     "broadcom-wl",
-    "amd-ucode",
+    "rsync",
+    "os-prober",
+    "git",        // Now a base package
+    "base-devel", // Now a base package
 ];
 
-pub const AUR_DEPENDENCIES: [&str; 3] = ["base-devel", "git", "sudo"];
+// AUR dependencies for installing AUR helper
+pub const AUR_DEPENDENCIES: [&str; 1] = ["sudo"]; // Sudo is now handled here
+
+pub const OMARCHY_REPO_URL: &str = "https://github.com/basecamp/omarchy.git";
+
+pub const FONT_PACKAGES: &[(&str, &[&str])] = &[
+    (
+        "Noto Fonts (Recommended)",
+        &[
+            "noto-fonts",
+            "noto-fonts-extra",
+            "noto-fonts-cjk",
+            "noto-fonts-emoji",
+        ],
+    ),
+    ("Liberation Fonts", &["ttf-liberation"]),
+    ("Dejavu Fonts", &["ttf-dejavu"]),
+    ("Nerd Fonts Complete", &["nerd-fonts-complete"]),
+    ("IBM Plex Fonts", &["ttf-ibm-plex"]),
+];
+
+pub const VIDEO_PACKAGES: &[(&str, &[&str])] = &[
+    (
+        "AMD/Intel (Mesa)",
+        &[
+            "mesa",
+            "xf86-video-amdgpu",
+            "xf86-video-intel",
+            "xf86-video-ati",
+        ],
+    ),
+    ("NVIDIA Proprietary", &["nvidia-dkms"]), // nvidia-utils is added automatically
+    ("NVIDIA Open Source", &["nvidia-open-dkms"]), // nvidia-utils is added automatically
+    (
+        "Nouveau (Legacy Open Source NVIDIA)",
+        &["xf86-video-nouveau"],
+    ),
+];

@@ -126,6 +126,8 @@ ALMA installs packages and runs preset scripts in the following order:
 4.  Preset scripts are executed one by one, in the alphanumeric order of their filenames.
 
 ## Full Command-Line Reference
+<details>
+<summary>Click to expand for all 'alma create' options</summary>
 ```
 USAGE:
     alma create [OPTIONS] [BLOCK_DEVICE | IMAGE]
@@ -192,6 +194,7 @@ OPTIONS:
     --dryrun
             Do not run any commands, just print them to stdfout
 ```
+</details>
 
 ## Troubleshooting
 ### mkinitcpio: /etc/mkinitcpio.d/linux.preset: No such file or directory

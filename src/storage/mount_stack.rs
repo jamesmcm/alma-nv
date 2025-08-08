@@ -1,13 +1,12 @@
-use super::Filesystem;
 use anyhow::anyhow;
 use log::{debug, warn};
 use nix::mount::{MsFlags, mount, umount};
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct MountStack<'a> {
     targets: Vec<PathBuf>,
-    filesystems: PhantomData<Filesystem<'a>>,
+    _lifetime: PhantomData<&'a ()>, // Changed to a generic lifetime
     dryrun: bool,
 }
 
@@ -15,9 +14,39 @@ impl<'a> MountStack<'a> {
     pub fn new(dryrun: bool) -> Self {
         MountStack {
             targets: Vec::new(),
-            filesystems: PhantomData,
+            _lifetime: PhantomData,
             dryrun,
         }
+    }
+
+    /// Mounts a single source to a target.
+    pub fn mount_single(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        options: Option<&str>,
+    ) -> nix::Result<()> {
+        debug!("Mounting {} to {}", source.display(), target.display());
+        if !self.dryrun {
+            // We can't specify a filesystem type for subvolume mounts, so we pass None
+            mount(
+                Some(source),
+                target,
+                None::<&str>,
+                MsFlags::empty(),
+                options,
+            )?;
+        } else {
+            let opts_str = options.map_or(String::new(), |o| format!("-o {}", o));
+            println!(
+                "mount {} {} {}",
+                opts_str,
+                source.display(),
+                target.display()
+            );
+        }
+        self.targets.push(target.to_path_buf());
+        Ok(())
     }
 
     pub fn mount(
