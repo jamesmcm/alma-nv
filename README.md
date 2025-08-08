@@ -15,7 +15,7 @@ Upgrading your packages is as easy as running `pacman -Syu` while the system is 
 
 ## Installation
 
-You can either build the project using `cargo build --release` or install the `alma`, `alma-git` or `alma-bin` package from the AUR.
+You can either build the project using `cargo build --release` or install the [alma-git](https://aur.archlinux.org/packages/alma-git) package from the AUR.
 
 ### Host system prerequisites
 
