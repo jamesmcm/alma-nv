@@ -93,7 +93,7 @@ impl<'a> StorageDevice<'a> {
         path.exists()
     }
 
-    pub fn get_partition(&self, index: u8) -> anyhow::Result<Partition> {
+    pub fn get_partition(&'_ self, index: u8) -> anyhow::Result<Partition<'_>> {
         let name = if self
             .name
             .chars()
