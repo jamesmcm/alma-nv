@@ -22,7 +22,5 @@ jobs:
           bash -n run-alma.sh
       - name: Test Docker build process
         run: |
-          # Verify the alma binary was built and copied correctly
-          docker run --rm alma-nv-test which alma
           # Test alma version/basic functionality
           docker run --rm alma-nv-test alma --version
