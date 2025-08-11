@@ -9,32 +9,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Enable WSL2
+      - name: Setup WSL2 and Ubuntu
         shell: pwsh
         run: |
-          Write-Host "Setting up WSL2 for Docker testing..." -ForegroundColor Green
+          Write-Host "Setting up WSL2 and Ubuntu..." -ForegroundColor Green
           
-          # Enable WSL2 features
-          Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart
-          Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -NoRestart
-          
-          # Set WSL2 as default
-          wsl --set-default-version 2
-          
-          Write-Host "✅ WSL2 features enabled" -ForegroundColor Green
-          
-      - name: Install Ubuntu in WSL2
-        shell: pwsh
-        run: |
-          Write-Host "Installing Ubuntu in WSL2..." -ForegroundColor Green
-          
-          # Install Ubuntu distribution
-          wsl --install Ubuntu --no-launch
+          # Install WSL2 with Ubuntu (simple approach)
+          wsl --install --distribution Ubuntu
           
           # Wait for installation to complete
-          Start-Sleep -Seconds 30
+          Write-Host "Waiting for WSL2 Ubuntu installation..." -ForegroundColor Cyan
+          Start-Sleep -Seconds 120
           
-          Write-Host "✅ Ubuntu installed in WSL2" -ForegroundColor Green
+          # Verify WSL installation
+          $wslList = wsl --list --verbose
+          Write-Host "WSL distributions:" -ForegroundColor Cyan
+          Write-Host $wslList
+          
+          Write-Host "✅ WSL2 Ubuntu setup complete" -ForegroundColor Green
           
       - name: Configure Docker in WSL2
         shell: pwsh
