@@ -7,6 +7,7 @@ impl FilesystemTypeArg {
         match self {
             FilesystemTypeArg::Ext4 => "ext4",
             FilesystemTypeArg::Btrfs => "btrfs",
+            FilesystemTypeArg::Vfat => "vfat",
         }
     }
 }
@@ -27,11 +28,16 @@ impl<'a> Filesystem<'a> {
         match fs_type {
             FilesystemTypeArg::Ext4 => command.arg("-F").arg(block.path()),
             FilesystemTypeArg::Btrfs => command.arg("-f").arg(block.path()),
+            FilesystemTypeArg::Vfat => command.arg("-F32").arg(block.path()),
         };
 
-        command
-            .run(mkfs.dryrun)
-            .with_context(|| format!("Error formatting filesystem with {}", mkfs.exec.display()))?;
+        command.run(mkfs.dryrun).with_context(|| {
+            format!(
+                "Error formatting {:?} with {}",
+                fs_type,
+                mkfs.exec.display()
+            )
+        })?;
 
         Ok(Self { fs_type, block })
     }

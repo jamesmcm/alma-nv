@@ -13,7 +13,7 @@ use which::which;
 
 #[derive(Debug)]
 pub struct Tool {
-    exec: PathBuf,
+    pub exec: PathBuf,
     pub dryrun: bool,
 }
 

@@ -5,6 +5,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::fs::DirEntry;
 use std::io;
@@ -228,6 +229,18 @@ impl std::str::FromStr for PresetsPath {
                     PathBuf::from_str(s).map_err(|e| e.to_string())?,
                 ))
             }
+        }
+    }
+}
+
+impl fmt::Display for PresetsPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PresetsPath::LocalDir(p) => write!(f, "{}", p.display()),
+            PresetsPath::LocalArchive(p, _) => write!(f, "{}", p.display()),
+            PresetsPath::UrlArchive(u, _) => write!(f, "{u}"),
+            PresetsPath::GitHttp(u) => write!(f, "{u}"),
+            PresetsPath::GitSSH(s) => write!(f, "{s}"),
         }
     }
 }

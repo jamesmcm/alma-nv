@@ -1,8 +1,6 @@
 use crate::constants::{FONT_PACKAGES, VIDEO_PACKAGES};
-use anyhow::{Context, anyhow};
 use dialoguer::{Confirm, Input, MultiSelect, Password, theme::ColorfulTheme};
-use log::{info, warn};
-use std::env;
+use log::info;
 
 // Struct to hold all collected user settings
 #[derive(Debug, Clone)]
@@ -17,46 +15,8 @@ pub struct UserSettings {
 }
 
 impl UserSettings {
-    /// Dispatches to either interactive or non-interactive setup.
-    pub fn new(noconfirm: bool) -> anyhow::Result<Self> {
-        if noconfirm {
-            Self::non_interactive()
-        } else {
-            Self::interactive()
-        }
-    }
-
-    /// Gathers settings from environment variables with sane defaults.
-    fn non_interactive() -> anyhow::Result<Self> {
-        info!("Running in non-interactive mode. Using environment variables or defaults.");
-
-        let username = env::var("ALMA_USERNAME").unwrap_or_else(|_| whoami::username());
-        warn!("Using username: {}", username);
-
-        let hostname = env::var("ALMA_HOSTNAME").unwrap_or_else(|_| "alma-linux".to_string());
-        warn!("Using hostname: {}", hostname);
-
-        // In non-interactive mode, we default to passwordless sudo for safety.
-        let passwordless_sudo = env::var("ALMA_PASSWORDLESS_SUDO")
-            .map(|v| v.to_lowercase() == "true" || v == "1")
-            .unwrap_or(true);
-        if passwordless_sudo {
-            warn!("Configuring passwordless sudo for user '{}'.", username);
-        }
-
-        Ok(Self {
-            username,
-            hostname,
-            user_password: None, // No password set for the user
-            passwordless_sudo,
-            timezone: env::var("ALMA_TIMEZONE").unwrap_or_else(|_| "UTC".to_string()),
-            graphics_packages: VIDEO_PACKAGES[0].1.iter().map(|s| s.to_string()).collect(), // Default to Mesa
-            font_packages: FONT_PACKAGES[0].1.iter().map(|s| s.to_string()).collect(), // Default to Noto
-        })
-    }
-
-    /// Prompts the user interactively for all settings.
-    fn interactive() -> anyhow::Result<Self> {
+    /// Prompts the user interactively for all settings. This is the sole entry point.
+    pub fn prompt() -> anyhow::Result<Self> {
         info!("Starting interactive setup...");
 
         let username = Input::with_theme(&ColorfulTheme::default())
@@ -68,7 +28,7 @@ impl UserSettings {
         let hostname = Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Enter hostname")
             .default("alma-linux".to_string())
-            .validate_with(|s: &str| {
+            .validate_with(|s: &String| {
                 if s.is_empty() {
                     Err("Hostname cannot be empty")
                 } else {
@@ -79,7 +39,7 @@ impl UserSettings {
 
         let user_password = Some(
             Password::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("Enter password for user '{}'", username))
+                .with_prompt(format!("Enter password for user '{username}'"))
                 .with_confirmation("Confirm password", "Passwords do not match.")
                 .interact()?,
         );
@@ -147,66 +107,50 @@ impl UserSettings {
         Ok((selected_video, selected_fonts))
     }
 
-    /// Generates a bash script string to perform user setup, sudo configuration, and timezone
-    pub fn generate_setup_script(&self, arch_chroot: &Tool) -> anyhow::Result<String> {
+    /// Generates a bash script to perform user setup based on the collected settings.
+    pub fn generate_setup_script(&self) -> anyhow::Result<String> {
         let mut script = String::new();
         script.push_str("set -eux\n");
-
-        // Set hostname
         script.push_str(&format!("echo {} > /etc/hostname\n", self.hostname));
-
-        // Timezone
         script.push_str(&format!(
             "ln -sf /usr/share/zoneinfo/{} /etc/localtime\n",
             self.timezone
         ));
+        script.push_str(&format!(
+            "useradd -m -G wheel {} || echo \"User {} already exists\"\n",
+            self.username, self.username
+        ));
 
-        // Create user
-        script.push_str(&format!("useradd -m -G wheel {} || true\n", self.username));
-
-        // Set user password
         if let Some(password) = &self.user_password {
             script.push_str(&format!(
-                "echo \"{0}:{1}\" | chpasswd\n",
+                "echo \"{}:{}\" | chpasswd\n",
                 self.username, password
             ));
         }
 
-        // Sudo configuration
         if self.passwordless_sudo {
             script.push_str("echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel\n");
         } else {
             script.push_str("echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel\n");
         }
 
-        // Enable user dirs update for common desktop environments
-        if let Ok(xdg_dirs) = arch_chroot
-            .execute()
-            .arg("/bin/bash")
-            .arg("-c")
-            .arg(format!(
-                "sudo -u {} which xdg-user-dirs-update",
-                self.username
-            ))
-            .run_text_output(false)
-        {
-            if !xdg_dirs.trim().is_empty() {
-                script.push_str(&format!("sudo -u {} xdg-user-dirs-update\n", self.username));
-            }
-        }
-
+        script.push_str(&format!(
+            "sudo -u {} xdg-user-dirs-update || true\n",
+            self.username
+        ));
         Ok(script)
     }
 }
 
-fn validate_username(input: &str) -> Result<(), &str> {
+fn validate_username(input: &String) -> Result<(), String> {
     if input.is_empty()
-        || input
-            .chars()
-            .any(|c| !c.is_ascii_lowercase() || !c.is_ascii_alphanumeric() && c != '_')
+        || input.chars().any(|c| !c.is_ascii_lowercase() && c != '_')
         || input.len() > 32
     {
-        Err("Invalid username: must be all lowercase, alphanumeric, <= 32 chars.")
+        Err(
+            "Invalid username: must be all lowercase, alphanumeric/_ only, <= 32 chars."
+                .to_string(),
+        )
     } else {
         Ok(())
     }

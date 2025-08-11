@@ -9,7 +9,7 @@ use anyhow::{Context, anyhow};
 use byte_unit::Byte;
 use console::style;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
-use log::{debug, info, warn};
+use log::{debug, info};
 
 use crate::args::{CreateCommand, FilesystemTypeArg, Manifest, Source, SystemVariant};
 use crate::constants::{self, OMARCHY_REPO_URL};
@@ -18,10 +18,11 @@ use crate::interactive::UserSettings;
 use crate::presets::{PathWrapper, PresetsCollection, Script};
 use crate::process::CommandExt;
 use crate::storage::{
-    BlockDevice, EncryptedDevice, Filesystem, FilesystemType, LoopDevice, MountStack,
-    StorageDevice, partition::Partition,
+    self, BlockDevice, EncryptedDevice, Filesystem, LoopDevice, MountStack, StorageDevice,
+    partition::Partition,
 };
 use crate::tool::{Tool, mount};
+use tempfile::TempDir;
 
 pub struct Tools {
     sgdisk: Tool,
@@ -65,6 +66,14 @@ impl Tools {
     }
 }
 
+fn fix_fstab(fstab: &str) -> String {
+    fstab
+        .lines()
+        .filter(|line| !line.contains("swap") && !line.starts_with('#'))
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     // --- Initial Command Validation & Adjustments ---
     validate_command(&command)?;
@@ -84,7 +93,7 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     for (i, p_path) in presets_paths.iter().enumerate() {
         let origin_path = command.presets[i].to_string();
         let baked_path =
-            PathBuf::from("/usr/share/alma/baked_sources").join(format!("preset_{}", i));
+            PathBuf::from("/usr/share/alma/baked_sources").join(format!("preset_{i}"));
         manifest_sources.push(Source {
             r#type: "preset".to_string(),
             origin: origin_path,
@@ -99,14 +108,15 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
             .collect::<Vec<&Path>>(),
     )?;
 
-    let user_settings = if command.noconfirm {
-        // Handle non-interactive case later, for now, assume environment variables are set.
-        // If they aren't, the presets will fail.
-        None
+    // We only prompt for user settings if we are NOT in non-interactive mode.
+    let user_settings: Option<UserSettings> = if !command.noconfirm {
+        Some(UserSettings::prompt()?)
     } else {
-        Some(UserSettings::prompt(command.noconfirm)?)
+        info!(
+            "--noconfirm specified, skipping interactive setup. System will be configured by presets."
+        );
+        None
     };
-
     // 2. Prepare tools
     let tools = Tools::new(&command)?;
 
@@ -164,10 +174,22 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         &boot_filesystem,
         &root_filesystem,
         &presets,
+        user_settings.as_ref(),
     )?;
 
     // 7. Copy baked sources into the image
     bake_sources_into_image(&tools, mount_point.path(), &presets_paths, &command)?;
+
+    if let Some(settings) = &user_settings {
+        info!("Applying settings from interactive setup...");
+        let setup_script = settings.generate_setup_script()?;
+        run_script_in_chroot(
+            &setup_script,
+            &tools.arch_chroot,
+            mount_point.path(),
+            command.dryrun,
+        )?;
+    }
 
     // 8. Apply customizations (AUR, presets)
     apply_customizations(&command, &tools.arch_chroot, &presets, mount_point.path())?;
@@ -186,7 +208,6 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         encrypted_root.as_ref(),
         &root_partition_base,
     )?;
-
     // 11. Generate manifest
     generate_manifest(
         &command,
@@ -433,6 +454,7 @@ fn bootstrap_system<'a>(
     boot_filesystem: &'a Option<Filesystem>,
     root_filesystem: &'a Filesystem,
     presets: &PresetsCollection,
+    user_settings: Option<&UserSettings>,
 ) -> anyhow::Result<(tempfile::TempDir, MountStack<'a>)> {
     let mount_point = tempfile::tempdir().context("Error creating a temporary directory")?;
     let mount_stack = mount(
@@ -449,11 +471,11 @@ fn bootstrap_system<'a>(
 
     // Add interactive packages if applicable
     if let Some(settings) = user_settings {
+        info!("Adding packages selected during interactive setup...");
         packages.extend(settings.graphics_packages.iter().cloned());
         packages.extend(settings.font_packages.iter().cloned());
     }
 
-    // --- NEW: Add packages based on System Variant (Omarchy) ---
     if command.system == SystemVariant::Omarchy {
         info!("Adding Omarchy specific packages (PipeWire, Bluetooth)...");
         packages.extend(
@@ -567,7 +589,7 @@ fn bake_sources_into_image(
     }
     // Copy presets
     for (i, preset_wrapper) in presets_paths.iter().enumerate() {
-        let dest = baked_sources_dir.join(format!("preset_{}", i));
+        let dest = baked_sources_dir.join(format!("preset_{i}"));
         info!(
             "Copying preset {} to {}",
             command.presets[i],
@@ -648,7 +670,7 @@ fn generate_manifest(
         encrypted_root: command.encrypted_root,
         aur_helper: command.aur_helper.to_string(),
         original_command: original_command.to_string(),
-        sources: sources.drain(..).collect(),
+        sources: std::mem::take(sources),
     };
 
     let manifest_path = mount_point.path().join("usr/share/alma/manifest.json");
@@ -744,17 +766,7 @@ pub fn setup_bootloader(
     }
 
     info!("Installing the Bootloader");
-    arch_chroot
-        .execute()
-        .arg(mount_point.path())
-        .args(["bash", "-c"])
-        .arg(format!(
-            "grub-install --target=i386-pc --boot-directory /boot {0} && \
-             grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable {0} && \
-             grub-mkconfig -o /boot/grub/grub.cfg",
-            disk_path.display()
-        ))
-        .run(dryrun).context("Failed to install grub")?;
+    run_grub_mkconfig_scoped(storage_device, mount_point, arch_chroot, dryrun)?;
 
     let bootloader = mount_point.path().join("boot/EFI/BOOT/BOOTX64.efi");
 
@@ -1030,7 +1042,83 @@ fn run_script_in_chroot(
         .arg(mount_path)
         .arg(script_path_in_chroot)
         .run(dryrun)
-        .with_context(|| format!("Failed running setup script:\n{}", script_text))?;
+        .with_context(|| format!("Failed running setup script:\n{script_text}"))?;
 
     Ok(())
+}
+
+/// Runs grub-mkconfig with os-prober temporarily wrapped to only scan the target device.
+fn run_grub_mkconfig_scoped(
+    storage_device: &StorageDevice,
+    mount_point: &tempfile::TempDir,
+    arch_chroot: &Tool,
+    dryrun: bool,
+) -> anyhow::Result<()> {
+    info!("Installing GRUB and running scoped os-prober...");
+
+    let disk_path = storage_device.path();
+    let os_prober_path = mount_point.path().join("usr/bin/os-prober");
+    let os_prober_real_path = mount_point.path().join("usr/bin/os-prober.real");
+
+    // The wrapper script that limits os-prober's scope
+    let wrapper_script = format!(
+        "#!/bin/sh\nexport OS_PROBER_DEVICES=\"{}\"\nexec /usr/bin/os-prober.real \"$@\"\n",
+        disk_path.display()
+    );
+
+    // 1. Rename the real os-prober
+    info!(
+        "Wrapping os-prober to limit scan to {}",
+        disk_path.display()
+    );
+    if !dryrun && os_prober_path.exists() {
+        fs::rename(&os_prober_path, &os_prober_real_path)
+            .context("Failed to move real os-prober")?;
+    } else if dryrun {
+        println!(
+            "mv {} {}",
+            os_prober_path.display(),
+            os_prober_real_path.display()
+        );
+    }
+
+    // 2. Write and chmod the wrapper script
+    if !dryrun && os_prober_real_path.exists() {
+        fs::write(&os_prober_path, &wrapper_script)
+            .context("Failed to write os-prober wrapper script")?;
+        fs::set_permissions(
+            &os_prober_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )?;
+    } else if dryrun {
+        println!("echo '{}' > {}", wrapper_script, os_prober_path.display());
+        println!("chmod 755 {}", os_prober_path.display());
+    }
+
+    // 3. Run grub-install and grub-mkconfig
+    let result = arch_chroot.execute()
+        .arg(mount_point.path())
+        .args(["bash", "-c"])
+        .arg(format!(
+            "grub-install --target=i386-pc --boot-directory /boot {0} && \
+             grub-install --target=x86_64-efi --efi-directory /boot --boot-directory /boot --removable {0} && \
+             grub-mkconfig -o /boot/grub/grub.cfg",
+            disk_path.display()
+        ))
+        .run(dryrun);
+
+    // 4. Clean up: restore the real os-prober, regardless of the result
+    info!("Unwrapping os-prober...");
+    if !dryrun && os_prober_real_path.exists() {
+        fs::rename(&os_prober_real_path, &os_prober_path)
+            .context("Failed to restore real os-prober")?;
+    } else if dryrun {
+        println!(
+            "mv {} {}",
+            os_prober_real_path.display(),
+            os_prober_path.display()
+        );
+    }
+
+    result.context("Failed to install grub or run grub-mkconfig")
 }

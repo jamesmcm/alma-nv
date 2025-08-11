@@ -1,7 +1,7 @@
 use crate::args::{CreateCommand, InstallCommand, Manifest};
 use crate::create;
 use crate::process::CommandExt;
-use crate::storage;
+use crate::storage::{self, BlockDevice, MountStack};
 use crate::tool::Tool;
 use anyhow::{Context, anyhow};
 use console::style;
@@ -29,7 +29,7 @@ pub fn install(command: InstallCommand) -> anyhow::Result<()> {
     let manifest: Manifest = serde_json::from_str(&fs::read_to_string(manifest_file)?)?;
     info!(
         "Found manifest for a '{}' system.",
-        manifest.system_variant.to_string()
+        manifest.system_variant
     );
 
     // 2. Determine target device/partitions
@@ -91,10 +91,12 @@ pub fn install(command: InstallCommand) -> anyhow::Result<()> {
         image: None,
         overwrite: true,
         dryrun: false,
+        pacman_conf: None,
     };
 
     // 5. Run the create command logic
     info!("Starting installation...");
+    let device_path_for_migration = reconstructed_cmd.path.clone();
     create::create(reconstructed_cmd)?;
 
     // 6. Copy user data and configs
@@ -114,7 +116,7 @@ pub fn install(command: InstallCommand) -> anyhow::Result<()> {
         // This is a complex problem. For now, we'll assume the user installed to a full disk if they want to copy.
         // A more robust solution would require parsing lsblk or udev.
         // For now, we make this part conditional on having a full device path.
-        if let Some(device_path) = &reconstructed_cmd.path {
+        if let Some(device_path) = &device_path_for_migration {
             migrate_system_data(device_path)?;
         } else {
             warn!(
@@ -132,7 +134,7 @@ fn migrate_system_data(target_device_path: &Path) -> anyhow::Result<()> {
     let rsync = Tool::find("rsync", false)?;
     let arch_chroot = Tool::find("arch-chroot", false)?;
 
-    let mut storage_device = storage::StorageDevice::from_path(target_device_path, true, false)?;
+    let storage_device = storage::StorageDevice::from_path(target_device_path, true, false)?;
     let root_partition = storage_device.get_partition(crate::constants::ROOT_PARTITION_INDEX)?;
     let mount_point = tempfile::tempdir()?;
     let mut mount_stack = MountStack::new(false);
@@ -237,7 +239,7 @@ fn copy_home_directory(target_device_path: &Path) -> anyhow::Result<()> {
     let rsync_tool = Tool::find("rsync", false)?;
 
     // We need to mount the new system's root partition to copy files into it.
-    let mut storage_device = storage::StorageDevice::from_path(target_device_path, true, false)?;
+    let storage_device = storage::StorageDevice::from_path(target_device_path, true, false)?;
     let root_partition = storage_device.get_partition(crate::constants::ROOT_PARTITION_INDEX)?;
 
     let mount_point = tempfile::tempdir()?;

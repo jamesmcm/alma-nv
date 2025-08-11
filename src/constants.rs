@@ -8,7 +8,8 @@ SystemMaxUse=16M
 ";
 
 // Base packages for all installations
-pub const BASE_PACKAGES: [&str; 11] = [
+pub const BASE_PACKAGES: [&str; 13] = [
+    // CORRECTED SIZE
     "base",
     "linux",
     "linux-firmware",
@@ -20,12 +21,12 @@ pub const BASE_PACKAGES: [&str; 11] = [
     "broadcom-wl",
     "rsync",
     "os-prober",
-    "git",        // Now a base package
-    "base-devel", // Now a base package
+    "git",
+    "base-devel",
 ];
 
 // AUR dependencies for installing AUR helper
-pub const AUR_DEPENDENCIES: [&str; 1] = ["sudo"]; // Sudo is now handled here
+pub const AUR_DEPENDENCIES: [&str; 1] = ["sudo"];
 
 pub const OMARCHY_REPO_URL: &str = "https://github.com/basecamp/omarchy.git";
 
@@ -55,8 +56,8 @@ pub const VIDEO_PACKAGES: &[(&str, &[&str])] = &[
             "xf86-video-ati",
         ],
     ),
-    ("NVIDIA Proprietary", &["nvidia-dkms"]), // nvidia-utils is added automatically
-    ("NVIDIA Open Source", &["nvidia-open-dkms"]), // nvidia-utils is added automatically
+    ("NVIDIA Proprietary", &["nvidia-dkms"]),
+    ("NVIDIA Open Source", &["nvidia-open-dkms"]),
     (
         "Nouveau (Legacy Open Source NVIDIA)",
         &["xf86-video-nouveau"],

@@ -1,7 +1,7 @@
 use super::aur::AurHelper;
 use anyhow::anyhow;
 use byte_unit::Byte;
-use std::{path::PathBuf, str::FromStr};
+use std::{fmt, path::PathBuf, str::FromStr};
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -56,12 +56,26 @@ pub enum SystemVariant {
     Omarchy,
 }
 
+impl fmt::Display for SystemVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                SystemVariant::Arch => "arch",
+                SystemVariant::Omarchy => "omarchy",
+            }
+        )
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FilesystemTypeArg {
     #[default]
     Ext4,
     Btrfs,
+    Vfat,
 }
 
 #[derive(Parser, Debug, Clone)]

@@ -1,3 +1,4 @@
+use crate::storage::filesystem::Filesystem;
 use anyhow::anyhow;
 use log::{debug, warn};
 use nix::mount::{MsFlags, mount, umount};
@@ -37,7 +38,7 @@ impl<'a> MountStack<'a> {
                 options,
             )?;
         } else {
-            let opts_str = options.map_or(String::new(), |o| format!("-o {}", o));
+            let opts_str = options.map_or(String::new(), |o| format!("-o {o}"));
             println!(
                 "mount {} {} {}",
                 opts_str,
