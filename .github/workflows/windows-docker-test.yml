@@ -37,8 +37,22 @@ jobs:
             # Check if WSL is already installed and showing available distributions
             if ($installResult -match "already installed" -or $installResult -match "valid distributions") {
               Write-Host "WSL is already installed, installing Ubuntu distribution..." -ForegroundColor Green
-              $ubuntuInstall = wsl --install -d Ubuntu 2>&1
-              Write-Host "Ubuntu install result: $ubuntuInstall" -ForegroundColor Cyan
+              Write-Host "Executing: wsl --install -d Ubuntu" -ForegroundColor Cyan
+              
+              try {
+                $ubuntuInstall = wsl --install -d Ubuntu 2>&1
+                Write-Host "Ubuntu install command exit code: $LASTEXITCODE" -ForegroundColor Cyan
+                Write-Host "Ubuntu install result: $ubuntuInstall" -ForegroundColor Cyan
+                
+                if ($ubuntuInstall -match "error" -or $ubuntuInstall -match "failed") {
+                  Write-Host "⚠️ Ubuntu installation encountered issues: $ubuntuInstall" -ForegroundColor Yellow
+                } else {
+                  Write-Host "✅ Ubuntu installation command completed" -ForegroundColor Green
+                }
+              }
+              catch {
+                Write-Host "❌ Ubuntu installation failed: $($_.Exception.Message)" -ForegroundColor Red
+              }
               
               # Wait for Ubuntu installation to complete
               Write-Host "Waiting for Ubuntu installation to complete..." -ForegroundColor Cyan
@@ -49,6 +63,7 @@ jobs:
               
               # Try alternative installation method with specific distribution
               Write-Host "Trying to install specific Ubuntu distribution..." -ForegroundColor Yellow
+              Write-Host "Executing: wsl --install -d Ubuntu" -ForegroundColor Cyan
               $ubuntuInstall = wsl --install -d Ubuntu 2>&1
               Write-Host "Ubuntu install result: $ubuntuInstall" -ForegroundColor Cyan
               Start-Sleep -Seconds 120
@@ -91,7 +106,9 @@ jobs:
             }
           } else {
             Write-Host "⚠️ Ubuntu distribution not found in WSL list" -ForegroundColor Yellow
-            Write-Host "This might be expected in CI environments where full WSL setup is not possible" -ForegroundColor Cyan
+            Write-Host "This might be expected in CI environments where full WSL setup is not possible" -ForegroundColor Yellow
+            Write-Host "CI environments may have limitations on WSL distribution installation." -ForegroundColor Yellow
+            Write-Host "This is normal and doesn't affect the PowerShell script functionality for end users." -ForegroundColor Cyan
           }
           
           Write-Host "✅ Ubuntu installation process completed" -ForegroundColor Green
