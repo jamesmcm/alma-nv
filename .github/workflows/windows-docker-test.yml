@@ -34,7 +34,13 @@ jobs:
             $installResult = wsl --install 2>&1
             Write-Host "Install output: $installResult" -ForegroundColor Cyan
             
-            if ($LASTEXITCODE -ne 0) {
+            # Check if WSL is already installed and showing available distributions
+            if ($installResult -match "already installed" -or $installResult -match "valid distributions") {
+              Write-Host "WSL is already installed, installing Ubuntu distribution..." -ForegroundColor Green
+              $ubuntuInstall = wsl --install -d Ubuntu 2>&1
+              Write-Host "Ubuntu install result: $ubuntuInstall" -ForegroundColor Cyan
+            }
+            elseif ($LASTEXITCODE -ne 0) {
               Write-Host "Installation returned exit code: $LASTEXITCODE" -ForegroundColor Yellow
               
               # Try alternative installation method with specific distribution
@@ -51,11 +57,34 @@ jobs:
           Start-Sleep -Seconds 60
           
           # Check what distributions are available/installed
+          Write-Host "Checking installed WSL distributions..." -ForegroundColor Cyan
           $wslList = wsl --list --verbose 2>&1
           Write-Host "Available WSL distributions:" -ForegroundColor Cyan
           Write-Host $wslList
           
-          Write-Host "✅ Ubuntu installation attempted" -ForegroundColor Green
+          # Check if Ubuntu is installed and accessible
+          $ubuntuInstalled = $false
+          if ($wslList -match "Ubuntu") {
+            Write-Host "✅ Ubuntu distribution detected" -ForegroundColor Green
+            $ubuntuInstalled = $true
+            
+            # Test if Ubuntu is accessible
+            try {
+              $testResult = wsl -d Ubuntu -e echo "Ubuntu test successful" 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Ubuntu is accessible and working" -ForegroundColor Green
+              } else {
+                Write-Host "⚠️ Ubuntu is installed but not yet accessible: $testResult" -ForegroundColor Yellow
+              }
+            }
+            catch {
+              Write-Host "⚠️ Ubuntu accessibility test failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+          } else {
+            Write-Host "⚠️ Ubuntu distribution not found in WSL list" -ForegroundColor Yellow
+          }
+          
+          Write-Host "✅ Ubuntu installation process completed" -ForegroundColor Green
           
       - name: Configure Docker in WSL2
         shell: pwsh
