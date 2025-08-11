@@ -1,0 +1,60 @@
+name: Windows Docker Tests
+
+on:
+  workflow_call:
+
+jobs:
+  windows-docker:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        shell: pwsh
+        run: |
+          Write-Host "Building ALMA Docker image..." -ForegroundColor Green
+          docker build -t alma-nv-test .
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to build Docker image" -ForegroundColor Red
+            exit $LASTEXITCODE
+          }
+      - name: Test Docker entrypoint script
+        shell: pwsh
+        run: |
+          # Test that the container starts and shows help without requiring privileged mode
+          Write-Host "Testing --help command..." -ForegroundColor Cyan
+          docker run --rm alma-nv-test --help
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to run --help command" -ForegroundColor Red
+            exit $LASTEXITCODE
+          }
+      - name: Validate Docker script syntax
+        run: |
+          # Check that docker-entrypoint.sh has valid bash syntax
+          bash -n docker-entrypoint.sh
+          # Check that run-alma.sh has valid bash syntax
+          bash -n run-alma.sh
+      - name: Validate PowerShell script syntax
+        shell: pwsh
+        run: |
+          # Check that run-alma.ps1 has valid PowerShell syntax
+          $syntaxErrors = $null
+          $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content .\run-alma.ps1 -Raw), [ref]$syntaxErrors)
+          if ($syntaxErrors.Count -gt 0) {
+            Write-Host "PowerShell syntax errors found:" -ForegroundColor Red
+            $syntaxErrors | ForEach-Object {
+              Write-Host "Line $($_.StartLine): $($_.Message)" -ForegroundColor Red
+            }
+            exit 1
+          }
+      - name: Test Docker build process
+        shell: pwsh
+        run: |
+          # Test alma version/basic functionality
+          Write-Host "Testing alma --version..." -ForegroundColor Cyan
+          docker run --rm alma-nv-test alma --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to run alma --version" -ForegroundColor Red
+            exit $LASTEXITCODE
+          }

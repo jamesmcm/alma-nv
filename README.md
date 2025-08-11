@@ -38,7 +38,7 @@ Optional, for QEMU testing, see the QEMU section below.
 
 ### Using Docker (Cross-Platform)
 
-ALMA can run on any system using Docker, not just Arch Linux. This is useful for running ALMA on Fedora, macOS, or any other system with Docker installed.
+ALMA can run on any system using Docker, including Linux, macOS, and Windows. This is useful for running ALMA on Fedora, macOS, Windows, or any other system with Docker installed.
 
 #### Prerequisites
 
@@ -60,7 +60,7 @@ The `run-alma.sh` script automatically:
 
 ```bash
 # Clone the repository
-git clone https://github.com/assapir/alma-nv.git
+git clone https://github.com/jamesmcm/alma-nv.git
 cd alma-nv
 
 # Make the run script executable
@@ -74,6 +74,44 @@ sudo ./run-alma.sh create /dev/sdb
 
 # Chroot into an existing installation
 sudo ./run-alma.sh chroot /dev/sdb
+```
+
+**Windows (PowerShell):**
+
+```powershell
+# Clone the repository
+git clone https://github.com/jamesmcm/alma-nv.git
+cd alma-nv
+
+# Create an encrypted 4GB image file
+.\run-alma.ps1 create -e --image 4GB my-arch-usb.img
+
+# Create a bootable USB drive (requires Docker Desktop with privileged containers)
+.\run-alma.ps1 create \\.\PhysicalDrive1
+
+# Chroot into an existing installation
+.\run-alma.ps1 chroot \\.\PhysicalDrive1
+
+# Show help
+.\run-alma.ps1 --help
+```
+
+#### Windows-Specific Notes
+
+- **Docker Desktop**: Windows users need Docker Desktop for Windows with WSL 2 backend
+- **User Permissions**: Ensure your user is in the `docker-users` group
+- **Device Paths**: Use Windows device paths like `\\.\PhysicalDrive1` for USB drives
+- **PowerShell**: The script requires PowerShell 5.1 or later
+- **Execution Policy**: You may need to run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` to allow script execution
+
+To identify the correct device path on Windows:
+
+```powershell
+# List available drives
+Get-Disk
+# Or use diskpart
+diskpart
+DISKPART> list disk
 ```
 
 #### Security Note

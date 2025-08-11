@@ -44,8 +44,10 @@ jobs:
           path: ./target/release/alma
   docker:
     uses: ./.github/workflows/docker-test.yml
+  windows-docker:
+    uses: ./.github/workflows/windows-docker-test.yml
   amd64binaries:
-    needs: [build, quickcheck, docker]
+    needs: [build, quickcheck, docker, windows-docker]
     runs-on: ubuntu-latest
     name: Amd64StaticBinaries
     steps:
@@ -61,7 +63,7 @@ jobs:
           name: x86_64-musl
           path: ./target/x86_64-unknown-linux-musl/release/alma
   update_release_draft:
-    needs: [quickcheck, build, amd64binaries, docker]
+    needs: [quickcheck, build, amd64binaries, docker, windows-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
