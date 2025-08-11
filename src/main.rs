@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use storage::EncryptedDevice;
 use storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice, MountStack};
 use tempfile::{TempDir, tempdir};
-use tool::Tool;
+use tool::{Tool, Tools};
 
 use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB};
 use crate::create::setup_bootloader;
@@ -125,43 +125,6 @@ fn select_block_device(allow_non_removable: bool, noconfirm: bool) -> anyhow::Re
         .interact()?;
 
     Ok(PathBuf::from("/dev").join(&devices[selection].name))
-}
-
-struct Tools {
-    sgdisk: Tool,
-    pacstrap: Tool,
-    arch_chroot: Tool,
-    genfstab: Tool,
-    mkfat: Tool,
-    mkext4: Tool,
-    cryptsetup: Option<Tool>,
-    blkid: Option<Tool>,
-}
-
-impl Tools {
-    fn new(command: &CreateCommand) -> anyhow::Result<Self> {
-        let dryrun = command.dryrun;
-        let encrypted = command.encrypted_root;
-
-        Ok(Self {
-            sgdisk: Tool::find("sgdisk", dryrun)?,
-            pacstrap: Tool::find("pacstrap", dryrun)?,
-            arch_chroot: Tool::find("arch-chroot", dryrun)?,
-            genfstab: Tool::find("genfstab", dryrun)?,
-            mkfat: Tool::find("mkfs.fat", dryrun)?,
-            mkext4: Tool::find("mkfs.ext4", dryrun)?,
-            cryptsetup: if encrypted {
-                Some(Tool::find("cryptsetup", dryrun)?)
-            } else {
-                None
-            },
-            blkid: if encrypted {
-                Some(Tool::find("blkid", dryrun)?)
-            } else {
-                None
-            },
-        })
-    }
 }
 
 fn resolve_device_path_and_image(

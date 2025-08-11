@@ -9,14 +9,32 @@ but all of them are based on squashfs, meaning that changes don't persist reboot
 
 ALMA is meant for those who wish to have a **mutable** live environment. It installs Arch
 Linux into a USB or an SD card, almost as if it was a hard drive. Some configuration is applied in
-order to minimize writes to the USB and making sure the system is bootable on both BIOS and UEFI
-systems.
+order to minimize writes to the USB and making sure the system is bootable on both BIOS and UEFI systems.
 
 Upgrading your packages is as easy as running `pacman -Syu` while the system is booted. This tool also provides an easy chroot command, so you can keep your live environment up to date without having to boot it. Encrypting the root partition is as easy as providing the `-e` flag.
 
 ## Installation
 
-You can either build the project using `cargo build --release` or install the `alma`, `alma-git` or `alma-bin` package from the AUR.
+You can either build the project using `cargo build --release` or install the [alma-git](https://aur.archlinux.org/packages/alma-git) package from the AUR.
+
+### Host system prerequisites
+
+ALMA must be run on Arch Linux (derivatives are not supported). Install these packages on the host before running `alma`:
+
+- arch-install-scripts (provides pacstrap, arch-chroot, genfstab)
+- gptfdisk (provides sgdisk)
+- dosfstools (provides mkfs.fat)
+- e2fsprogs (provides mkfs.ext4)
+- util-linux (provides losetup, blkid; typically part of base)
+- cryptsetup (only required when using `--encrypted-root`)
+
+Quick install:
+
+```bash
+sudo pacman -S --needed arch-install-scripts gptfdisk dosfstools e2fsprogs util-linux cryptsetup
+```
+
+Optional, for QEMU testing, see the QEMU section below.
 
 ### Using Docker (Cross-Platform)
 
@@ -235,8 +253,7 @@ OPTIONS:
             Paths to preset files or directories (local, http(s) zip/tar.gz, or git repository)
 
     --image <SIZE_WITH_UNIT>
-            Create an image with a certain size in the given path instead of using an actual
-            block device
+            Create an image with a certain size in the given path instead of using an actual block device
 
     --overwrite
             Overwrite existing image files. Use with caution!
