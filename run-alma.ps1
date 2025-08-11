@@ -6,6 +6,9 @@
 .DESCRIPTION
     This script builds and runs the ALMA-NV Docker container with the necessary privileges
     for disk operations. It's the Windows PowerShell equivalent of run-alma.sh.
+    
+    Requires Docker Desktop for Windows with WSL2 backend enabled.
+    WSL2 provides the Linux environment needed to run the Arch Linux container.
 .PARAMETER Arguments
     Arguments to pass to the alma command inside the container
 .EXAMPLE
@@ -14,6 +17,12 @@
 .EXAMPLE
     .\run-alma.ps1 create --preset installer
     Runs ALMA with the installer preset
+.NOTES
+    Prerequisites:
+    - Windows 10/11 with WSL2 enabled
+    - Docker Desktop for Windows with WSL2 backend
+    - User account in 'docker-users' group
+    - PowerShell 5.1 or later
 #>
 
 [CmdletBinding()]
@@ -38,10 +47,23 @@ function Test-DockerAvailable {
 
 function Test-DockerImageExists {
     param([string]$ImageName)
-
+    
     try {
         $null = docker image inspect $ImageName 2>$null
         return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-WSL2Available {
+    try {
+        $wslStatus = wsl --status 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+        return $false
     }
     catch {
         return $false
@@ -61,12 +83,25 @@ function Write-Error-Message {
 
 # Main execution
 try {
+    # Check if WSL2 is available (helpful for diagnostics)
+    if (-not (Test-WSL2Available)) {
+        Write-Host "WARNING: WSL2 not detected. Docker Desktop requires WSL2 for optimal performance." -ForegroundColor Yellow
+        Write-Host "Consider running 'wsl --install' or 'wsl --update' as administrator." -ForegroundColor Yellow
+        Write-Host ""
+    }
+
     # Check if Docker is available
     if (-not (Test-DockerAvailable)) {
         Write-Error-Message "Cannot access Docker. Make sure:"
-        Write-Host "  1. Docker Desktop is running" -ForegroundColor Red
-        Write-Host "  2. You have permission to access Docker" -ForegroundColor Red
+        Write-Host "  1. Docker Desktop is running with WSL2 backend enabled" -ForegroundColor Red
+        Write-Host "  2. WSL2 is installed and configured (run 'wsl --status')" -ForegroundColor Red
         Write-Host "  3. You are in the 'docker-users' group" -ForegroundColor Red
+        Write-Host "  4. Docker Desktop is set to use WSL2 engine (not Hyper-V)" -ForegroundColor Red
+        Write-Host "" -ForegroundColor Red
+        Write-Host "To fix:" -ForegroundColor Yellow
+        Write-Host "  • Run 'wsl --install' or 'wsl --update' as administrator" -ForegroundColor Yellow
+        Write-Host "  • Enable WSL2 backend in Docker Desktop settings" -ForegroundColor Yellow
+        Write-Host "  • Add your user to docker-users group: net localgroup docker-users `$env:USERNAME /add" -ForegroundColor Yellow
         exit 1
     }
 

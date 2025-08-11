@@ -98,11 +98,26 @@ cd alma-nv
 
 #### Windows-Specific Notes
 
-- **Docker Desktop**: Windows users need Docker Desktop for Windows with WSL 2 backend
+- **WSL2 Required**: Windows users need WSL2 enabled with a Linux distribution (Ubuntu recommended)
+- **Docker Desktop**: Install Docker Desktop for Windows with WSL 2 backend enabled
 - **User Permissions**: Ensure your user is in the `docker-users` group
 - **Device Paths**: Use Windows device paths like `\\.\PhysicalDrive1` for USB drives
 - **PowerShell**: The script requires PowerShell 5.1 or later
 - **Execution Policy**: You may need to run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` to allow script execution
+
+**Setting up WSL2 for ALMA:**
+```powershell
+# Install/update WSL2 (requires admin privileges)
+wsl --install
+# or update existing WSL
+wsl --update
+
+# Verify WSL2 is default version
+wsl --set-default-version 2
+
+# Install Ubuntu (if not already installed)
+wsl --install Ubuntu
+```
 
 To identify the correct device path on Windows:
 
