@@ -36,6 +36,50 @@ sudo pacman -S --needed arch-install-scripts gptfdisk dosfstools e2fsprogs util-
 
 Optional, for QEMU testing, see the QEMU section below.
 
+### Using Docker (Cross-Platform)
+
+ALMA can run on any system using Docker, not just Arch Linux. This is useful for running ALMA on Fedora, macOS, or any other system with Docker installed.
+
+#### Prerequisites
+
+- Docker installed and running
+- User in the `docker` group, or use `sudo`
+
+#### How it works
+
+The `run-alma.sh` script automatically:
+
+- Builds the Docker image with all required Arch Linux tools
+- Runs ALMA with proper privileges for device access
+- Mounts the current directory as the working directory
+- Handles all Docker complexity transparently
+
+#### Usage Examples
+
+**Linux/macOS (Bash):**
+
+```bash
+# Clone the repository
+git clone https://github.com/assapir/alma-nv.git
+cd alma-nv
+
+# Make the run script executable
+chmod +x run-alma.sh
+
+# Create an encrypted 4GB image file
+./run-alma.sh create -e --image 4GB my-arch-usb.img
+
+# Create a bootable USB drive (requires sudo)
+sudo ./run-alma.sh create /dev/sdb
+
+# Chroot into an existing installation
+sudo ./run-alma.sh chroot /dev/sdb
+```
+
+#### Security Note
+
+The Docker container runs with `--privileged` access to perform disk operations. This is required for device access, partitioning, and filesystem operations, but has security implications. Only run ALMA containers from trusted sources.
+
 ### Using Arch Linux derivatives
 
 Using Arch Linux derivatives, such as Manjaro, isn't supported by ALMA. It may work and may not. Please do not open bugs or feature

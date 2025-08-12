@@ -1,0 +1,26 @@
+name: Docker Tests
+
+on:
+  workflow_call:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t alma-nv-test .
+      - name: Test Docker entrypoint script
+        run: |
+          # Test that the container starts and shows help without requiring privileged mode
+          docker run --rm alma-nv-test --help
+      - name: Validate Docker script syntax
+        run: |
+          # Check that docker-entrypoint.sh has valid bash syntax
+          bash -n docker-entrypoint.sh
+          # Check that run-alma.sh has valid bash syntax
+          bash -n run-alma.sh
+      - name: Test Docker build process
+        run: |
+          # Test alma version/basic functionality
+          docker run --rm alma-nv-test alma --version

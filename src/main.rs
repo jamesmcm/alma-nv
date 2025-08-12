@@ -27,6 +27,7 @@ use storage::{BlockDevice, Filesystem, FilesystemType, LoopDevice, MountStack};
 use tempfile::{TempDir, tempdir};
 use tool::{Tool, Tools};
 
+use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB};
 use crate::create::setup_bootloader;
 use crate::presets::PathWrapper;
 use crate::storage::StorageDevice;
@@ -517,11 +518,10 @@ fn create(command: CreateCommand) -> anyhow::Result<()> {
     // This logic must be in the main `create` scope to manage lifetimes correctly.
     let boot_size_mb = command
         .boot_size
-        .map_or(300, |b| (b.as_u128() / 1_048_576) as u32);
+        .map_or(DEFAULT_BOOT_MB, |b| (b.as_u128() / 1_048_576) as u32);
 
     // --- New boot size validation ---
-    const MIN_BOOT_MB: u32 = 200;
-    const MAX_BOOT_MB: u32 = 2048; // 2GiB
+
     if !(MIN_BOOT_MB..=MAX_BOOT_MB).contains(&boot_size_mb) {
         warn!(
             "The specified boot partition size ({boot_size_mb} MiB) is outside the recommended range of {MIN_BOOT_MB} MiB to {MAX_BOOT_MB} MiB."
