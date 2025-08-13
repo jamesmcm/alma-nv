@@ -9,7 +9,6 @@ SystemMaxUse=16M
 
 // Base packages for all installations
 pub const BASE_PACKAGES: [&str; 13] = [
-    // CORRECTED SIZE
     "base",
     "linux",
     "linux-firmware",
@@ -51,9 +50,9 @@ pub const VIDEO_PACKAGES: &[(&str, &[&str])] = &[
         "AMD/Intel (Mesa)",
         &[
             "mesa",
-            "xf86-video-amdgpu",
-            "xf86-video-intel",
-            "xf86-video-ati",
+            // "xf86-video-amdgpu",
+            // "xf86-video-intel",
+            // "xf86-video-ati",
         ],
     ),
     ("NVIDIA Proprietary", &["nvidia-dkms"]),

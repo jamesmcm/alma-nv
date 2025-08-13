@@ -20,27 +20,37 @@ impl<'a> MountStack<'a> {
         }
     }
 
-    /// Mounts a single source to a target.
+    /// Mounts a single source to a target, with explicit flags and data.
     pub fn mount_single(
         &mut self,
         source: &Path,
         target: &Path,
-        options: Option<&str>,
+        fstype: Option<&str>,
+        flags: MsFlags,
+        data: Option<&str>,
     ) -> nix::Result<()> {
-        debug!("Mounting {} to {}", source.display(), target.display());
+        debug!(
+            "Mounting {} to {} (type: {:?}, flags: {:?}, data: {:?})",
+            source.display(),
+            target.display(),
+            fstype.unwrap_or("auto"),
+            flags,
+            data.unwrap_or("none")
+        );
         if !self.dryrun {
-            // We can't specify a filesystem type for subvolume mounts, so we pass None
-            mount(
-                Some(source),
-                target,
-                None::<&str>,
-                MsFlags::empty(),
-                options,
-            )?;
+            mount(Some(source), target, fstype, flags, data)?;
         } else {
-            let opts_str = options.map_or(String::new(), |o| format!("-o {o}"));
+            let type_str = fstype.map_or(String::new(), |t| format!("-t {t}"));
+            // In dryrun, we lump flags and data into a single -o for simplicity.
+            let opts_str = match (flags.contains(MsFlags::MS_NOATIME), data) {
+                (true, Some(d)) => format!("-o noatime,{d}"),
+                (true, None) => "-o noatime".to_string(),
+                (false, Some(d)) => format!("-o {d}"),
+                (false, None) => String::new(),
+            };
             println!(
-                "mount {} {} {}",
+                "mount {} {} {} {}",
+                type_str,
                 opts_str,
                 source.display(),
                 target.display()
@@ -50,33 +60,20 @@ impl<'a> MountStack<'a> {
         Ok(())
     }
 
+    /// Convenience wrapper for mounting a Filesystem object with standard flags.
     pub fn mount(
         &mut self,
         filesystem: &'a Filesystem,
         target: PathBuf,
-        options: Option<&str>,
+        extra_flags: MsFlags,
     ) -> nix::Result<()> {
-        let source = filesystem.block().path();
-        debug!("Mounting {filesystem:?} to {target:?}");
-        if !self.dryrun {
-            mount(
-                Some(source),
-                &target,
-                Some(filesystem.fs_type().to_mount_type()),
-                MsFlags::MS_NOATIME,
-                options,
-            )?;
-        } else {
-            // TODO: add flags etc.
-            println!(
-                "mount {} {} -t {}",
-                source.display(),
-                target.display(),
-                filesystem.fs_type().to_mount_type()
-            );
-        }
-        self.targets.push(target);
-        Ok(())
+        self.mount_single(
+            filesystem.block().path(),
+            &target,
+            Some(filesystem.fs_type().to_mount_type()),
+            extra_flags,
+            None,
+        )
     }
 
     pub fn bind_mount(

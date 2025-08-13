@@ -142,6 +142,7 @@ impl UserSettings {
     }
 }
 
+#[allow(clippy::ptr_arg)]
 fn validate_username(input: &String) -> Result<(), String> {
     if input.is_empty()
         || input.chars().any(|c| !c.is_ascii_lowercase() && c != '_')

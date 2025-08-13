@@ -3,18 +3,15 @@ use crate::create;
 use crate::process::CommandExt;
 use crate::storage::{self, BlockDevice, MountStack};
 use crate::tool::Tool;
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use console::style;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use log::{info, warn};
+use nix::mount::MsFlags;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const MANIFEST_PATH: &str = "/usr/share/alma/manifest.json";
-
-fn check_internet() -> bool {
-    ureq::get("http://archlinux.org").call().is_ok()
-}
 
 pub fn install(command: InstallCommand) -> anyhow::Result<()> {
     // 1. Check if we are on a valid ALMA system by finding the manifest
@@ -27,18 +24,23 @@ pub fn install(command: InstallCommand) -> anyhow::Result<()> {
         ));
     }
     let manifest: Manifest = serde_json::from_str(&fs::read_to_string(manifest_file)?)?;
-    info!(
-        "Found manifest for a '{}' system.",
-        manifest.system_variant
-    );
+    info!("Found manifest for a '{}' system.", manifest.system_variant);
 
     // 2. Determine target device/partitions
     // This logic is now mutually exclusive thanks to clap's `conflicts_with_all`
     let (target_path, root_partition, boot_partition) = if let Some(path) = command.target_device {
         (Some(path), None, None)
-    } else {
+    } else if command.root_partition.is_some() {
         // When using partitions, the "device" path for wiping is None.
         (None, command.root_partition, command.boot_partition)
+    } else {
+        let current_disk_name = get_current_root_disk();
+        let selected_path = select_target_device(
+            command.allow_non_removable,
+            command.noconfirm,
+            current_disk_name,
+        )?;
+        (Some(selected_path), None, None)
     };
 
     // 3. Confirm with user
@@ -138,7 +140,14 @@ fn migrate_system_data(target_device_path: &Path) -> anyhow::Result<()> {
     let root_partition = storage_device.get_partition(crate::constants::ROOT_PARTITION_INDEX)?;
     let mount_point = tempfile::tempdir()?;
     let mut mount_stack = MountStack::new(false);
-    mount_stack.mount_single(root_partition.path(), mount_point.path(), None)?;
+    // Since this is a simple mount, we pass empty flags and no specific data.
+    mount_stack.mount_single(
+        root_partition.path(),
+        mount_point.path(),
+        None, // Let the kernel auto-detect the fs type (ext4 or btrfs)
+        MsFlags::empty(),
+        None,
+    )?;
 
     // --- Copy /home ---
     info!("Copying /home directory...");
@@ -234,56 +243,42 @@ fn select_target_device(
     Ok(PathBuf::from("/dev").join(&devices[selection].name))
 }
 
-fn copy_home_directory(target_device_path: &Path) -> anyhow::Result<()> {
-    info!("Copying /home directory to the new system...");
-    let rsync_tool = Tool::find("rsync", false)?;
+/// Finds the parent disk device (e.g., "sda", "nvme0n1") for the currently running root filesystem.
+fn get_current_root_disk() -> Option<String> {
+    info!("Determining the current root disk to exclude it from the target list...");
 
-    // We need to mount the new system's root partition to copy files into it.
-    let storage_device = storage::StorageDevice::from_path(target_device_path, true, false)?;
-    let root_partition = storage_device.get_partition(crate::constants::ROOT_PARTITION_INDEX)?;
+    // 1. Read /proc/mounts to find the device mounted at /
+    let mounts = fs::read_to_string("/proc/mounts").ok()?;
+    let root_mount_line = mounts.lines().find(|line| {
+        let mut parts = line.split_whitespace();
+        let _device = parts.next();
+        let mount_point = parts.next();
+        mount_point == Some("/")
+    })?;
 
-    let mount_point = tempfile::tempdir()?;
-    let mut mount_cmd = Tool::find("mount", false)?.execute();
-    mount_cmd
-        .arg(root_partition.path())
-        .arg(mount_point.path())
-        .run(false)?;
+    let root_partition_path = root_mount_line.split_whitespace().next()?;
+    info!("Root filesystem is on partition: {root_partition_path}");
 
-    let home_dest = mount_point.path().join("home/");
-    info!("rsync -a /home/ {}", home_dest.display());
-    rsync_tool
-        .execute()
-        .arg("-a") // archive mode, preserves everything
-        .arg("--info=progress2")
-        .arg("/home/")
-        .arg(home_dest)
-        .run(false)
-        .context("Failed to copy /home directory with rsync.")?;
+    // 2. Use lsblk to find the parent disk (PKNAME) of the root partition.
+    // This is the most reliable way to handle names like /dev/sda1, /dev/nvme0n1p1, etc.
+    let output = std::process::Command::new("lsblk")
+        .arg("-no")
+        .arg("PKNAME")
+        .arg(root_partition_path)
+        .output()
+        .ok()?;
 
-    // Chown the copied files inside the new system
-    info!("Correcting file ownership in new /home...");
-    let arch_chroot_tool = Tool::find("arch-chroot", false)?;
-    for entry in fs::read_dir("/home")? {
-        let entry = entry?;
-        let user = entry.file_name();
-        if entry.path().is_dir() {
-            arch_chroot_tool
-                .execute()
-                .arg(mount_point.path())
-                .args([
-                    "chown",
-                    "-R",
-                    &format!("{0}:{0}", user.to_string_lossy()),
-                    &format!("/home/{}", user.to_string_lossy()),
-                ])
-                .run(false)?;
-        }
+    if !output.status.success() {
+        warn!("lsblk failed, cannot determine current root disk.");
+        return None;
     }
 
-    Tool::find("umount", false)?
-        .execute()
-        .arg(mount_point.path())
-        .run(false)?;
-    info!("Home directory copied successfully.");
-    Ok(())
+    let disk_name = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if disk_name.is_empty() {
+        warn!("lsblk returned empty name, cannot determine current root disk.");
+        return None;
+    }
+
+    info!("Current root disk identified as: {disk_name}");
+    Some(disk_name)
 }

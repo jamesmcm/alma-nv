@@ -10,6 +10,7 @@ use byte_unit::Byte;
 use console::style;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use log::{debug, info};
+use nix::mount::MsFlags;
 
 use crate::args::{CreateCommand, FilesystemTypeArg, Manifest, Source, SystemVariant};
 use crate::constants::{self, OMARCHY_REPO_URL};
@@ -32,7 +33,7 @@ pub struct Tools {
     mkfat: Tool,
     mkext4: Tool,
     mkbtrfs: Tool,
-    btrfs: Tool, // New tool
+    btrfs: Tool,
     git: Tool,
     cryptsetup: Option<Tool>,
     blkid: Option<Tool>,
@@ -90,10 +91,9 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         .map(|p| p.into_path_wrapper(command.noconfirm))
         .collect::<anyhow::Result<Vec<PathWrapper>>>()?;
 
-    for (i, p_path) in presets_paths.iter().enumerate() {
+    for (i, _p_path) in presets_paths.iter().enumerate() {
         let origin_path = command.presets[i].to_string();
-        let baked_path =
-            PathBuf::from("/usr/share/alma/baked_sources").join(format!("preset_{i}"));
+        let baked_path = PathBuf::from("/usr/share/alma/baked_sources").join(format!("preset_{i}"));
         manifest_sources.push(Source {
             r#type: "preset".to_string(),
             origin: origin_path,
@@ -248,7 +248,15 @@ fn setup_btrfs_subvolumes(
     // 2. Mount top-level to create subvolumes
     let temp_mount = tempfile::tempdir().context("Failed to create temp dir for btrfs setup")?;
     let mut temp_mount_stack = MountStack::new(dryrun);
-    temp_mount_stack.mount_single(device.path(), temp_mount.path(), Some("noatime"))?;
+
+    // We pass `noatime` as a flag and the `data` (options string) as None.
+    temp_mount_stack.mount_single(
+        device.path(),
+        temp_mount.path(),
+        Some("btrfs"), // Be explicit about the type
+        MsFlags::MS_NOATIME,
+        None,
+    )?;
 
     // 3. Create subvolumes
     let subvolumes = ["@", "@home", "@log", "@pkg"];
@@ -624,26 +632,58 @@ fn install_omarchy(
     command: &CreateCommand,
 ) -> anyhow::Result<()> {
     info!("Installing Omarchy...");
-    // The repo is already baked into /usr/share/omarchy by bake_sources_into_image
-    let omarchy_install_script = Path::new("/usr/share/omarchy/install.sh");
+    let baked_omarchy_dir = mount_path.join("usr/share/omarchy");
+    let target_omarchy_base_dir_host = mount_path.join("root/.local/share");
+    let install_script_path_chroot = "/root/.local/share/omarchy/install.sh";
 
-    if !command.dryrun
-        && !mount_path
-            .join(omarchy_install_script.strip_prefix("/").unwrap())
-            .exists()
-    {
+    if !command.dryrun && !baked_omarchy_dir.exists() {
         return Err(anyhow!(
-            "Could not find baked Omarchy install script. This should not happen."
+            "Could not find baked Omarchy repo at {}. This should not happen.",
+            baked_omarchy_dir.display()
         ));
     }
 
-    info!("Running Omarchy install script. This will be interactive.");
+    // 1. Create the target directory structure inside the chroot.
+    info!("Setting up Omarchy's expected directory structure at /root/.local/share/omarchy");
+    if !command.dryrun {
+        fs::create_dir_all(&target_omarchy_base_dir_host)?;
+    }
+
+    // 2. Copy the `omarchy` directory itself into the target base directory.
+    // Do NOT use `content_only`.
+    if !command.dryrun {
+        // We want to copy the folder `omarchy` into `/root/.local/share/`
+        let mut copy_options = fs_extra::dir::CopyOptions::new();
+        copy_options.overwrite = true;
+
+        fs_extra::dir::copy(
+            &baked_omarchy_dir,
+            &target_omarchy_base_dir_host,
+            &copy_options,
+        )
+        .context(format!(
+            "Failed to copy {} to {}",
+            baked_omarchy_dir.display(),
+            target_omarchy_base_dir_host.display()
+        ))?;
+    } else {
+        println!(
+            "cp -r {} {}",
+            baked_omarchy_dir.display(),
+            target_omarchy_base_dir_host.display()
+        );
+    }
+
+    info!("Running Omarchy install script from its expected location. This will be interactive.");
+
+    // 3. Execute the script from its absolute, expected path.
     tools
         .arch_chroot
         .execute()
         .arg(mount_path)
-        .args(["bash", omarchy_install_script.to_str().unwrap()])
-        .run(command.dryrun)?;
+        .args(["bash", install_script_path_chroot])
+        .run(command.dryrun)
+        .context("Omarchy installation script failed.")?;
 
     Ok(())
 }
@@ -681,9 +721,6 @@ fn generate_manifest(
     Ok(())
 }
 
-// ... other helper functions from main.rs like apply_customizations, finalize_installation, interactive_chroot_and_cleanup go here ...
-// They are largely unchanged but should be moved into this file.
-
 pub fn setup_bootloader(
     storage_device: &StorageDevice,
     mount_point: &TempDir,
@@ -696,7 +733,6 @@ pub fn setup_bootloader(
     info!("Starting bootloader initialisation tasks");
     // If boot partition was generated or given, then it is already mounted at /boot in the MountStack by this stage
 
-    let disk_path = storage_device.path();
     info!("Generating initramfs");
     let plymouth_exists = Path::new(&mount_point.path().join("usr/bin/plymouth")).exists();
     if !dryrun {
@@ -1015,36 +1051,39 @@ fn run_script_in_chroot(
     mount_path: &Path,
     dryrun: bool,
 ) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    // The tempfile logic was slightly flawed, this is the most direct way
+    let temp_file_obj = tempfile::Builder::new()
+        .prefix(".")
+        .tempfile_in(mount_path)?;
 
-    let mut script_file = tempfile::NamedTempFile::new_in(mount_path)
-        .context("Failed creating temporary setup script")?;
+    // 1. Write content.
+    temp_file_obj.as_file().write_all(script_text.as_bytes())?;
+    temp_file_obj.as_file().sync_all()?;
 
-    script_file
-        .write_all(script_text.as_bytes())
-        .and_then(|_| script_file.as_file_mut().metadata())
-        .and_then(|metadata| {
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(script_file.path(), permissions)
-        })
-        .context("Failed setting up temporary script")?;
+    // 2. Persist to close the handle.
+    let temp_path = temp_file_obj.into_temp_path();
 
-    let script_path_in_chroot = Path::new("/").join(
-        script_file
-            .path()
-            .file_name()
-            .expect("Script path had no file name"),
-    );
+    // 3. Set permissions on the now-closed file.
+    let mut perms = fs::metadata(&temp_path)?.permissions();
+    perms.set_mode(0o755); // This now works because PermissionsExt is in scope
+    fs::set_permissions(&temp_path, perms)?; // This now works because `perms` is the right type
 
-    arch_chroot
+    let script_path_in_chroot =
+        Path::new("/").join(temp_path.file_name().expect("Script path had no file name"));
+
+    // 4. Execute the script.
+    let result = arch_chroot
         .execute()
         .arg(mount_path)
-        .arg(script_path_in_chroot)
-        .run(dryrun)
-        .with_context(|| format!("Failed running setup script:\n{script_text}"))?;
+        .arg(script_path_in_chroot.to_str().unwrap())
+        .run(dryrun);
 
-    Ok(())
+    // 5. Manually clean up the file (TempPath cleans itself on drop, but explicit is fine)
+    if let Err(e) = temp_path.close() {
+        log::warn!("Failed to clean up temporary script file: {e}");
+    }
+
+    result.with_context(|| format!("Failed running setup script:\n{script_text}"))
 }
 
 /// Runs grub-mkconfig with os-prober temporarily wrapped to only scan the target device.
