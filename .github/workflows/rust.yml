@@ -2,64 +2,66 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
 
-jobs: 
+jobs:
   quickcheck:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.rustversion.outputs.version }}
     steps:
-    - uses: actions/checkout@v4
-    - run: cargo check
-    - run: cargo pkgid
-    - run: 'echo "$(cargo pkgid | cut -d# -f2)"'
-    - id: rustversion
-      run: 'echo "version=$(cargo pkgid | cut -d# -f2)" >> $GITHUB_OUTPUT'
+      - uses: actions/checkout@v4
+      - run: cargo check
+      - run: cargo pkgid
+      - run: 'echo "$(cargo pkgid | cut -d# -f2)"'
+      - id: rustversion
+        run: 'echo "version=$(cargo pkgid | cut -d# -f2)" >> $GITHUB_OUTPUT'
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Install Clippy
-      run: rustup component add clippy rustfmt
-    - id: cargoversion
-      run: cargo --version
-    - id: rustcversion
-      run: rustc --version
-    - name: Clippy
-      run: cargo clippy -- -D warnings
-    - name: Rustfmt
-      run: cargo fmt --all -- --check
-    - name: Run tests
-      run: cargo test
-    - name: Build
-      run: cargo build --verbose --release
-    - name: Upload alma-nv Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: x86_64-gcc
-        path: ./target/release/alma
+      - uses: actions/checkout@v4
+      - name: Install Clippy
+        run: rustup component add clippy rustfmt
+      - id: cargoversion
+        run: cargo --version
+      - id: rustcversion
+        run: rustc --version
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+      - name: Run tests
+        run: cargo test
+      - name: Build
+        run: cargo build --verbose --release
+      - name: Upload alma-nv Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-gcc
+          path: ./target/release/alma
+  docker:
+    uses: ./.github/workflows/docker-test.yml
   amd64binaries:
-    needs: [build, quickcheck]
+    needs: [build, quickcheck, docker]
     runs-on: ubuntu-latest
     name: Amd64StaticBinaries
     steps:
-    - uses: actions/checkout@v4
-    - name: StaticBinaryBuild
-      id: amd64staticbuild
-      uses: jamesmcm/cargo-deb-amd64-ubuntu@master
-      with:
-        cmd: cargo build --release --target=x86_64-unknown-linux-musl
-    - name: Upload alma-nv Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: x86_64-musl
-        path: ./target/x86_64-unknown-linux-musl/release/alma
+      - uses: actions/checkout@v4
+      - name: StaticBinaryBuild
+        id: amd64staticbuild
+        uses: jamesmcm/cargo-deb-amd64-ubuntu@master
+        with:
+          cmd: cargo build --release --target=x86_64-unknown-linux-musl
+      - name: Upload alma-nv Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-musl
+          path: ./target/x86_64-unknown-linux-musl/release/alma
   update_release_draft:
-    needs: [quickcheck, build, amd64binaries]
+    needs: [quickcheck, build, amd64binaries, docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,9 +71,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag_name: '${{ needs.quickcheck.outputs.version }}'
+          tag_name: "${{ needs.quickcheck.outputs.version }}"
           release_name: alma-nv ${{ needs.quickcheck.outputs.version }}
-          body: 'Change Me'
+          body: "Change Me"
           draft: true
           prerelease: false
       - uses: actions/download-artifact@v4
@@ -85,7 +87,7 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./x86_64-gcc/alma
-          asset_name: 'alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_gcc'
+          asset_name: "alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_gcc"
           asset_content_type: application/octet-stream
       - name: Upload Amd64 Static Binary
         uses: actions/upload-release-asset@v1
@@ -94,5 +96,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./x86_64-musl/alma
-          asset_name: 'alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_musl'
+          asset_name: "alma-nv_${{needs.quickcheck.outputs.version}}_linux_x86-64_musl"
           asset_content_type: application/octet-stream

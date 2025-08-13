@@ -1,6 +1,6 @@
 use super::Tool;
 use crate::args;
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use log::debug;
 
 use std::os::unix::process::CommandExt as UnixCommandExt;
@@ -9,7 +9,12 @@ use std::path::PathBuf;
 /// Loads given block device in qemu
 /// Uses kvm if it is enabled
 pub fn qemu(command: args::QemuCommand) -> anyhow::Result<()> {
-    let qemu = Tool::find("qemu-system-x86_64", false)?;
+    let qemu = Tool::find("qemu-system-x86_64", false).map_err(|_| {
+        anyhow!(
+            "qemu-system-x86_64 is required for running the virtual machine.
+Please install the 'qemu-desktop' 'qemu-system-x86' 'qemu-system-x86-firmware' packages."
+        )
+    })?;
 
     let mut run = qemu.execute();
     run.args([

@@ -1,35 +1,35 @@
-
 name: PullRequest
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
 
-jobs: 
+jobs:
   quickcheck:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.rustversion.outputs.version }}
     steps:
-    - uses: actions/checkout@v4
-    - run: cargo check
-    - run: cargo pkgid
-    - run: 'echo "$(cargo pkgid | cut -d# -f2)"'
-    - id: rustversion
-      run: 'echo "version=$(cargo pkgid | cut -d# -f2)" >> $GITHUB_OUTPUT'
+      - uses: actions/checkout@v4
+      - run: cargo check
+      - run: cargo pkgid
+      - run: 'echo "$(cargo pkgid | cut -d# -f2)"'
+      - id: rustversion
+        run: 'echo "version=$(cargo pkgid | cut -d# -f2)" >> $GITHUB_OUTPUT'
   clippy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Install Clippy
-      run: rustup component add clippy rustfmt
-    - name: Clippy
-      run: cargo clippy -- -D warnings
-    - name: Rustfmt
-      run: cargo fmt --all -- --check
-    - name: Test
-      run: cargo test
-
+      - uses: actions/checkout@v4
+      - name: Install Clippy
+        run: rustup component add clippy rustfmt
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test
+  docker:
+    uses: ./.github/workflows/docker-test.yml
