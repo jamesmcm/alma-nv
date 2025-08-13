@@ -79,6 +79,15 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     // --- Initial Command Validation & Adjustments ---
     validate_command(&command)?;
     adjust_command_for_system(&mut command);
+    // We only prompt for user settings if we are NOT in non-interactive mode.
+    let user_settings: Option<UserSettings> = if !command.noconfirm {
+        Some(UserSettings::prompt()?)
+    } else {
+        info!(
+            "--noconfirm specified, skipping interactive setup. System will be configured by presets."
+        );
+        None
+    };
 
     let original_command_string = env::args().collect::<Vec<String>>().join(" ");
     let mut manifest_sources: Vec<Source> = Vec::new();
@@ -108,15 +117,6 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
             .collect::<Vec<&Path>>(),
     )?;
 
-    // We only prompt for user settings if we are NOT in non-interactive mode.
-    let user_settings: Option<UserSettings> = if !command.noconfirm {
-        Some(UserSettings::prompt()?)
-    } else {
-        info!(
-            "--noconfirm specified, skipping interactive setup. System will be configured by presets."
-        );
-        None
-    };
     // 2. Prepare tools
     let tools = Tools::new(&command)?;
 
@@ -196,7 +196,11 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
 
     // 9. Install Omarchy if requested
     if command.system == SystemVariant::Omarchy {
-        install_omarchy(&tools, mount_point.path(), &command)?;
+        // We need the username. In interactive mode, we have it.
+        // In non-interactive, presets are expected to have created the user.
+        // We will default to a common name if not in interactive mode, but this path is less robust.
+        let username = user_settings.as_ref().map_or("user", |s| &s.username);
+        install_omarchy(&tools, mount_point.path(), &command, username)?;
     }
 
     // 10. Finalize installation (bootloader, services)
@@ -290,6 +294,7 @@ fn validate_command(command: &CreateCommand) -> anyhow::Result<()> {
 }
 
 fn adjust_command_for_system(command: &mut CreateCommand) {
+    // TODO: Do we want this? Maybe just warn if ext4 ?
     if command.system == SystemVariant::Omarchy {
         info!("System variant 'Omarchy' selected. Overriding filesystem to BTRFS.");
         command.filesystem = FilesystemTypeArg::Btrfs;
@@ -489,6 +494,7 @@ fn bootstrap_system<'a>(
         packages.extend(
             [
                 "wget",
+                "gum",
                 "pipewire",
                 "pipewire-alsa",
                 "pipewire-jack",
@@ -630,42 +636,40 @@ fn install_omarchy(
     tools: &Tools,
     mount_path: &Path,
     command: &CreateCommand,
+    username: &str,
 ) -> anyhow::Result<()> {
-    info!("Installing Omarchy...");
+    info!("Installing Omarchy as user '{username}'...");
+
+    // The path needs to be in the *user's* home directory now, not root's.
+    let target_omarchy_base_dir_chroot = format!("/home/{username}/.local/share");
+    let target_omarchy_base_dir_host =
+        mount_path.join(target_omarchy_base_dir_chroot.strip_prefix("/").unwrap());
+    let install_script_path_chroot = format!("/home/{username}/.local/share/omarchy/install.sh");
+
     let baked_omarchy_dir = mount_path.join("usr/share/omarchy");
-    let target_omarchy_base_dir_host = mount_path.join("root/.local/share");
-    let install_script_path_chroot = "/root/.local/share/omarchy/install.sh";
-
-    if !command.dryrun && !baked_omarchy_dir.exists() {
-        return Err(anyhow!(
-            "Could not find baked Omarchy repo at {}. This should not happen.",
-            baked_omarchy_dir.display()
-        ));
-    }
-
-    // 1. Create the target directory structure inside the chroot.
-    info!("Setting up Omarchy's expected directory structure at /root/.local/share/omarchy");
     if !command.dryrun {
         fs::create_dir_all(&target_omarchy_base_dir_host)?;
-    }
-
-    // 2. Copy the `omarchy` directory itself into the target base directory.
-    // Do NOT use `content_only`.
-    if !command.dryrun {
-        // We want to copy the folder `omarchy` into `/root/.local/share/`
         let mut copy_options = fs_extra::dir::CopyOptions::new();
         copy_options.overwrite = true;
-
         fs_extra::dir::copy(
             &baked_omarchy_dir,
             &target_omarchy_base_dir_host,
             &copy_options,
-        )
-        .context(format!(
-            "Failed to copy {} to {}",
-            baked_omarchy_dir.display(),
-            target_omarchy_base_dir_host.display()
-        ))?;
+        )?;
+
+        // CRITICAL: We must chown the copied directory to the new user.
+        info!("Setting ownership of Omarchy scripts for user '{username}'");
+        tools
+            .arch_chroot
+            .execute()
+            .arg(mount_path)
+            .args([
+                "chown",
+                "-R",
+                &format!("{username}:{username}"),
+                &format!("/home/{username}/.local"),
+            ])
+            .run(command.dryrun)?;
     } else {
         println!(
             "cp -r {} {}",
@@ -674,14 +678,16 @@ fn install_omarchy(
         );
     }
 
-    info!("Running Omarchy install script from its expected location. This will be interactive.");
+    info!(
+        "Running Omarchy install script from its expected location as user '{username}'. This will be interactive."
+    );
 
-    // 3. Execute the script from its absolute, expected path.
+    // Use `sudo -u` to run the command as the specified user.
     tools
         .arch_chroot
         .execute()
         .arg(mount_path)
-        .args(["bash", install_script_path_chroot])
+        .args(["sudo", "-u", username, "bash", &install_script_path_chroot])
         .run(command.dryrun)
         .context("Omarchy installation script failed.")?;
 
