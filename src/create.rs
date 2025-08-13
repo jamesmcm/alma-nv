@@ -9,11 +9,12 @@ use anyhow::{Context, anyhow};
 use byte_unit::Byte;
 use console::style;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
-use log::{debug, info};
+use log::{debug, info, warn};
 use nix::mount::MsFlags;
 
 use crate::args::{CreateCommand, FilesystemTypeArg, Manifest, Source, SystemVariant};
 use crate::constants::{self, OMARCHY_REPO_URL};
+use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB};
 use crate::initcpio;
 use crate::interactive::UserSettings;
 use crate::presets::{PathWrapper, PresetsCollection, Script};
@@ -22,50 +23,9 @@ use crate::storage::{
     self, BlockDevice, EncryptedDevice, Filesystem, LoopDevice, MountStack, StorageDevice,
     partition::Partition,
 };
+use crate::tool::Tools;
 use crate::tool::{Tool, mount};
 use tempfile::TempDir;
-
-pub struct Tools {
-    sgdisk: Tool,
-    pacstrap: Tool,
-    arch_chroot: Tool,
-    genfstab: Tool,
-    mkfat: Tool,
-    mkext4: Tool,
-    mkbtrfs: Tool,
-    btrfs: Tool,
-    git: Tool,
-    cryptsetup: Option<Tool>,
-    blkid: Option<Tool>,
-}
-
-impl Tools {
-    fn new(command: &CreateCommand) -> anyhow::Result<Self> {
-        let dryrun = command.dryrun;
-        let encrypted = command.encrypted_root;
-        Ok(Self {
-            sgdisk: Tool::find("sgdisk", dryrun)?,
-            pacstrap: Tool::find("pacstrap", dryrun)?,
-            arch_chroot: Tool::find("arch-chroot", dryrun)?,
-            genfstab: Tool::find("genfstab", dryrun)?,
-            mkfat: Tool::find("mkfs.fat", dryrun)?,
-            mkext4: Tool::find("mkfs.ext4", dryrun)?,
-            mkbtrfs: Tool::find("mkfs.btrfs", dryrun)?,
-            btrfs: Tool::find("btrfs", dryrun)?, // Find the btrfs utility
-            git: Tool::find("git", dryrun)?,
-            cryptsetup: if encrypted {
-                Some(Tool::find("cryptsetup", dryrun)?)
-            } else {
-                None
-            },
-            blkid: if encrypted {
-                Some(Tool::find("blkid", dryrun)?)
-            } else {
-                None
-            },
-        })
-    }
-}
 
 fn fix_fstab(fstab: &str) -> String {
     fstab
@@ -152,8 +112,12 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     if root_fs_type == FilesystemTypeArg::Btrfs {
         setup_btrfs_subvolumes(
             root_block_device,
-            &tools.mkbtrfs,
-            &tools.btrfs,
+            tools.mkbtrfs.as_ref().ok_or_else(|| {
+                anyhow!("Please install the btrfs-progs package to create btrfs filesystems")
+            })?,
+            tools.btrfs.as_ref().ok_or_else(|| {
+                anyhow!("Please install the btrfs-progs package to create btrfs filesystems")
+            })?,
             command.dryrun,
         )?;
     } else {
@@ -399,8 +363,28 @@ fn partition_and_format<'a>(
 ) -> anyhow::Result<(Option<Partition<'a>>, Partition<'a>)> {
     let boot_size_mb = command
         .boot_size
-        .map_or(300, |b| (b.as_u128() / 1_048_576) as u32);
-    // ... boot size validation ...
+        .map_or(DEFAULT_BOOT_MB, |b| (b.as_u128() / 1_048_576) as u32);
+
+    if !(MIN_BOOT_MB..=MAX_BOOT_MB).contains(&boot_size_mb) {
+        warn!(
+            "The specified boot partition size ({boot_size_mb} MiB) is outside the recommended range of {MIN_BOOT_MB} MiB to {MAX_BOOT_MB} MiB."
+        );
+        warn!(
+            "A size that is too small may fail, and a size that is too large is often unnecessary."
+        );
+
+        if !command.noconfirm {
+            let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Do you want to continue with this size?")
+                .default(false)
+                .interact()?;
+            if !confirmed {
+                return Err(anyhow!(
+                    "User aborted operation due to boot partition size warning."
+                ));
+            }
+        }
+    }
 
     let (boot_partition, root_partition_base) = if let Some(root_partition_path) =
         &command.root_partition
