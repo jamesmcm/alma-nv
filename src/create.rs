@@ -662,9 +662,20 @@ fn install_omarchy(
         );
     }
 
-    info!(
-        "Running Omarchy install script from its expected location as user '{username}'. This will be interactive."
+    info!("Patching Omarchy scripts to remove systemctl '--now' flag...");
+    let patch_command = format!(
+        "find /home/{username}/.local/share/omarchy -type f -name '*.sh' -print0 | xargs -0 sed -i 's/enable --now/enable/g'"
     );
+
+    tools
+        .arch_chroot
+        .execute()
+        .arg(mount_path)
+        .args(["bash", "-c", &patch_command])
+        .run(command.dryrun)
+        .context("Failed to patch Omarchy install scripts.")?;
+
+    info!("Running patched Omarchy install script as user '{username}'. This will be interactive.");
 
     // Use `sudo -u` to run the command as the specified user.
     tools

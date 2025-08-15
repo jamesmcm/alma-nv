@@ -20,8 +20,8 @@ impl UserSettings {
         info!("Starting interactive setup...");
 
         let username = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Enter username")
-            .default(whoami::username())
+            .with_prompt("Enter username (cannot be root)")
+            .default("archie".to_string())
             .validate_with(validate_username)
             .interact_text()?;
 
@@ -144,6 +144,10 @@ impl UserSettings {
 
 #[allow(clippy::ptr_arg)]
 fn validate_username(input: &String) -> Result<(), String> {
+    if input == "root" {
+        return Err("The username 'root' is reserved and cannot be used.".to_string());
+    }
+
     if input.is_empty()
         || input.chars().any(|c| !c.is_ascii_lowercase() && c != '_')
         || input.len() > 32
