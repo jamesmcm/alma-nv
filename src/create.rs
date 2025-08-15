@@ -158,16 +158,7 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     // 8. Apply customizations (AUR, presets)
     apply_customizations(&command, &tools.arch_chroot, &presets, mount_point.path())?;
 
-    // 9. Install Omarchy if requested
-    if command.system == SystemVariant::Omarchy {
-        // We need the username. In interactive mode, we have it.
-        // In non-interactive, presets are expected to have created the user.
-        // We will default to a common name if not in interactive mode, but this path is less robust.
-        let username = user_settings.as_ref().map_or("user", |s| &s.username);
-        install_omarchy(&tools, mount_point.path(), &command, username)?;
-    }
-
-    // 10. Finalize installation (bootloader, services)
+    // 9. Finalize installation (bootloader, services)
     finalize_installation(
         &command,
         &tools,
@@ -176,6 +167,16 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         encrypted_root.as_ref(),
         &root_partition_base,
     )?;
+
+    // 10. Install Omarchy if requested
+    if command.system == SystemVariant::Omarchy {
+        // We need the username. In interactive mode, we have it.
+        // In non-interactive, presets are expected to have created the user.
+        // We will default to a common name if not in interactive mode, but this path is less robust.
+        let username = user_settings.as_ref().map_or("user", |s| &s.username);
+        install_omarchy(&tools, mount_point.path(), &command, username)?;
+    }
+
     // 11. Generate manifest
     generate_manifest(
         &command,
@@ -488,6 +489,7 @@ fn bootstrap_system<'a>(
                 "wireplumber",
                 "bluez",
                 "bluez-utils",
+                "python",
             ]
             .iter()
             .map(|s| s.to_string()),
