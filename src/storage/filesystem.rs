@@ -1,48 +1,48 @@
 use super::markers::BlockDevice;
-use crate::{process::CommandExt, tool::Tool};
+use crate::{args::FilesystemTypeArg, process::CommandExt, tool::Tool};
 use anyhow::Context;
 
-#[derive(Debug, Clone, Copy)]
-pub enum FilesystemType {
-    Ext4,
-    Vfat,
-}
-
-impl FilesystemType {
+impl FilesystemTypeArg {
     pub fn to_mount_type(self) -> &'static str {
         match self {
-            FilesystemType::Ext4 => "ext4",
-            FilesystemType::Vfat => "vfat",
+            FilesystemTypeArg::Ext4 => "ext4",
+            FilesystemTypeArg::Btrfs => "btrfs",
+            FilesystemTypeArg::Vfat => "vfat",
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Filesystem<'a> {
-    fs_type: FilesystemType,
+    fs_type: FilesystemTypeArg,
     block: &'a dyn BlockDevice,
 }
 
 impl<'a> Filesystem<'a> {
     pub fn format(
         block: &'a dyn BlockDevice,
-        fs_type: FilesystemType,
+        fs_type: FilesystemTypeArg,
         mkfs: &Tool,
     ) -> anyhow::Result<Self> {
         let mut command = mkfs.execute();
         match fs_type {
-            FilesystemType::Ext4 => command.arg("-F").arg(block.path()),
-            FilesystemType::Vfat => command.arg("-F32").arg(block.path()),
+            FilesystemTypeArg::Ext4 => command.arg("-F").arg(block.path()),
+            FilesystemTypeArg::Btrfs => command.arg("-f").arg(block.path()),
+            FilesystemTypeArg::Vfat => command.arg("-F32").arg(block.path()),
         };
 
-        command
-            .run(mkfs.dryrun)
-            .context("Error formatting filesystem")?;
+        command.run(mkfs.dryrun).with_context(|| {
+            format!(
+                "Error formatting {:?} with {}",
+                fs_type,
+                mkfs.exec.display()
+            )
+        })?;
 
         Ok(Self { fs_type, block })
     }
 
-    pub fn from_partition(block: &'a dyn BlockDevice, fs_type: FilesystemType) -> Self {
+    pub fn from_partition(block: &'a dyn BlockDevice, fs_type: FilesystemTypeArg) -> Self {
         Self { fs_type, block }
     }
 
@@ -50,7 +50,7 @@ impl<'a> Filesystem<'a> {
         self.block
     }
 
-    pub fn fs_type(&self) -> FilesystemType {
+    pub fn fs_type(&self) -> FilesystemTypeArg {
         self.fs_type
     }
 }

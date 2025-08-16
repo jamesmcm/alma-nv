@@ -1,13 +1,13 @@
-use super::Filesystem;
+use crate::storage::filesystem::Filesystem;
 use anyhow::anyhow;
 use log::{debug, warn};
 use nix::mount::{MsFlags, mount, umount};
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct MountStack<'a> {
     targets: Vec<PathBuf>,
-    filesystems: PhantomData<Filesystem<'a>>,
+    _lifetime: PhantomData<&'a ()>, // Changed to a generic lifetime
     dryrun: bool,
 }
 
@@ -15,38 +15,65 @@ impl<'a> MountStack<'a> {
     pub fn new(dryrun: bool) -> Self {
         MountStack {
             targets: Vec::new(),
-            filesystems: PhantomData,
+            _lifetime: PhantomData,
             dryrun,
         }
     }
 
+    /// Mounts a single source to a target, with explicit flags and data.
+    pub fn mount_single(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        fstype: Option<&str>,
+        flags: MsFlags,
+        data: Option<&str>,
+    ) -> nix::Result<()> {
+        debug!(
+            "Mounting {} to {} (type: {:?}, flags: {:?}, data: {:?})",
+            source.display(),
+            target.display(),
+            fstype.unwrap_or("auto"),
+            flags,
+            data.unwrap_or("none")
+        );
+        if !self.dryrun {
+            mount(Some(source), target, fstype, flags, data)?;
+        } else {
+            let type_str = fstype.map_or(String::new(), |t| format!("-t {t}"));
+            // In dryrun, we lump flags and data into a single -o for simplicity.
+            let opts_str = match (flags.contains(MsFlags::MS_NOATIME), data) {
+                (true, Some(d)) => format!("-o noatime,{d}"),
+                (true, None) => "-o noatime".to_string(),
+                (false, Some(d)) => format!("-o {d}"),
+                (false, None) => String::new(),
+            };
+            println!(
+                "mount {} {} {} {}",
+                type_str,
+                opts_str,
+                source.display(),
+                target.display()
+            );
+        }
+        self.targets.push(target.to_path_buf());
+        Ok(())
+    }
+
+    /// Convenience wrapper for mounting a Filesystem object with standard flags.
     pub fn mount(
         &mut self,
         filesystem: &'a Filesystem,
         target: PathBuf,
-        options: Option<&str>,
+        extra_flags: MsFlags,
     ) -> nix::Result<()> {
-        let source = filesystem.block().path();
-        debug!("Mounting {filesystem:?} to {target:?}");
-        if !self.dryrun {
-            mount(
-                Some(source),
-                &target,
-                Some(filesystem.fs_type().to_mount_type()),
-                MsFlags::MS_NOATIME,
-                options,
-            )?;
-        } else {
-            // TODO: add flags etc.
-            println!(
-                "mount {} {} -t {}",
-                source.display(),
-                target.display(),
-                filesystem.fs_type().to_mount_type()
-            );
-        }
-        self.targets.push(target);
-        Ok(())
+        self.mount_single(
+            filesystem.block().path(),
+            &target,
+            Some(filesystem.fs_type().to_mount_type()),
+            extra_flags,
+            None,
+        )
     }
 
     pub fn bind_mount(
