@@ -490,6 +490,8 @@ fn bootstrap_system<'a>(
                 "bluez",
                 "bluez-utils",
                 "python",
+                "python-gobject",
+                "ufw",
             ]
             .iter()
             .map(|s| s.to_string()),
@@ -643,7 +645,6 @@ fn install_omarchy(
             &copy_options,
         )?;
 
-        // CRITICAL: We must chown the copied directory to the new user.
         info!("Setting ownership of Omarchy scripts for user '{username}'");
         tools
             .arch_chroot
@@ -666,8 +667,44 @@ fn install_omarchy(
 
     info!("Patching Omarchy scripts to remove systemctl '--now' flag...");
     let patch_command = format!(
-        "find /home/{username}/.local/share/omarchy -type f -name '*.sh' -print0 | xargs -0 sed -i 's/enable --now/enable/g'"
+        "find /home/{username}/.local/share/omarchy -type f -name '*.sh' -print0 | xargs -0 sed -i \
+            -e 's/enable --now/enable/g' \
+            -e 's/sudo ufw enable/sudo systemctl enable ufw.service/g' \
+            -e 's/^reboot/# reboot (disabled in chroot)/g' \
+            -e 's/sudo ufw reload/# sudo ufw reload (disabled in chroot)/g'",
     );
+
+    let ufw_path = mount_path.join("usr/bin/ufw");
+    let ufw_real_path = mount_path.join("usr/bin/ufw.real");
+
+    let wrapper_script = r#"#!/bin/bash
+echo "[alma-nv wrapper] Intercepted ufw command: ufw $@" >&2
+if [[ "$1" == "enable" ]]; then
+  echo "[alma-nv wrapper] Executing 'systemctl enable ufw.service' instead." >&2
+  systemctl enable ufw.service
+else
+  echo "[alma-nv wrapper] Suppressing stateful ufw command in chroot." >&2
+fi
+exit 0
+"#;
+
+    // 1. Rename the real ufw and create the wrapper
+    info!("Wrapping ufw command to make it chroot-safe...");
+    if !command.dryrun && ufw_path.exists() {
+        fs::rename(&ufw_path, &ufw_real_path).context("Failed to move real ufw binary")?;
+        fs::write(&ufw_path, wrapper_script).context("Failed to write ufw wrapper script")?;
+        fs::set_permissions(
+            &ufw_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )?;
+    } else if command.dryrun {
+        println!("mv {} {}", ufw_path.display(), ufw_real_path.display());
+        println!(
+            "echo '...' > {} && chmod 755 {}",
+            ufw_path.display(),
+            ufw_path.display()
+        );
+    }
 
     tools
         .arch_chroot
@@ -687,6 +724,13 @@ fn install_omarchy(
         .args(["sudo", "-u", username, "bash", &install_script_path_chroot])
         .run(command.dryrun)
         .context("Omarchy installation script failed.")?;
+
+    info!("Restoring original ufw command...");
+    if !command.dryrun && ufw_real_path.exists() {
+        fs::rename(&ufw_real_path, &ufw_path).context("Failed to restore real ufw binary")?;
+    } else if command.dryrun {
+        println!("mv {} {}", ufw_real_path.display(), ufw_path.display());
+    }
 
     Ok(())
 }
