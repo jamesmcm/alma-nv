@@ -718,15 +718,19 @@ fn install_omarchy(
 ) -> anyhow::Result<()> {
     info!("Installing Omarchy as user '{username}'...");
 
-    // The path needs to be in the *user's* home directory now, not root's.
-    let target_omarchy_base_dir_chroot = format!("/home/{username}/.local/share");
-    let target_omarchy_base_dir_host =
-        mount_path.join(target_omarchy_base_dir_chroot.strip_prefix("/").unwrap());
-    let install_script_path_chroot = format!("/home/{username}/.local/share/omarchy/install.sh");
-
+    // Define paths
+    let user_home_dir_chroot = PathBuf::from("/home").join(username);
+    let user_home_dir_host = mount_path.join("home").join(username);
+    let target_omarchy_base_dir_host = user_home_dir_host.join(".local/share");
+    let install_script_path_chroot = user_home_dir_chroot.join(".local/share/omarchy/install.sh");
     let baked_omarchy_dir = mount_path.join("usr/share/omarchy");
+
     if !command.dryrun {
+        // Ensure the user's home directory exists and copy files.
+        // This is a safeguard; `useradd -m` should have created the home dir.
+        fs::create_dir_all(&user_home_dir_host)?;
         fs::create_dir_all(&target_omarchy_base_dir_host)?;
+
         let mut copy_options = fs_extra::dir::CopyOptions::new();
         copy_options.overwrite = true;
         fs_extra::dir::copy(
@@ -736,12 +740,17 @@ fn install_omarchy(
         )?;
 
         // Copy firewall.sh to user home dir
-        let firewall_src_path = baked_omarchy_dir.join("firewall.sh");
-        let firewall_dest_path = mount_path.join("home").join(username).join("firewall.sh");
+        let firewall_src_path = target_omarchy_base_dir_host
+            .join("omarchy")
+            .join("install")
+            .join("development")
+            .join("firewall.sh");
+        let firewall_dest_path = user_home_dir_host.join("firewall.sh");
         info!("Copying firewall.sh to user's home directory.");
         fs::copy(&firewall_src_path, &firewall_dest_path)?;
 
-        info!("Setting ownership of Omarchy scripts and firewall.sh for user '{username}'");
+        info!("Setting ownership for user '{username}'");
+
         tools
             .arch_chroot
             .execute()
@@ -750,17 +759,7 @@ fn install_omarchy(
                 "chown",
                 "-R",
                 &format!("{username}:{username}"),
-                &format!("/home/{username}/.local"),
-            ])
-            .run(command.dryrun)?;
-        tools
-            .arch_chroot
-            .execute()
-            .arg(mount_path)
-            .args([
-                "chown",
-                &format!("{username}:{username}"),
-                &format!("/home/{username}/firewall.sh"),
+                user_home_dir_chroot.to_str().unwrap(),
             ])
             .run(command.dryrun)?;
     } else {
@@ -768,6 +767,17 @@ fn install_omarchy(
             "cp -r {} {}",
             baked_omarchy_dir.display(),
             target_omarchy_base_dir_host.display()
+        );
+        let firewall_src_path = target_omarchy_base_dir_host
+            .join("omarchy")
+            .join("install")
+            .join("development")
+            .join("firewall.sh");
+        let firewall_dest_path = user_home_dir_host.join("firewall.sh");
+        println!(
+            "cp {} {}",
+            firewall_src_path.display(),
+            firewall_dest_path.display()
         );
     }
 
@@ -797,12 +807,14 @@ exit 0
     // 1. Rename the real ufw and create the wrapper
     info!("Wrapping ufw command to make it chroot-safe...");
     if !command.dryrun {
-        fs::rename(&ufw_path, &ufw_real_path).context("Failed to move real ufw binary")?;
-        fs::write(&ufw_path, wrapper_script).context("Failed to write ufw wrapper script")?;
-        fs::set_permissions(
-            &ufw_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )?;
+        if ufw_path.exists() {
+            fs::rename(&ufw_path, &ufw_real_path).context("Failed to move real ufw binary")?;
+            fs::write(&ufw_path, wrapper_script).context("Failed to write ufw wrapper script")?;
+            fs::set_permissions(
+                &ufw_path,
+                std::os::unix::fs::PermissionsExt::from_mode(0o755),
+            )?;
+        }
     } else if command.dryrun {
         println!("mv {} {}", ufw_path.display(), ufw_real_path.display());
         println!(
@@ -827,12 +839,18 @@ exit 0
         .arch_chroot
         .execute()
         .arg(mount_path)
-        .args(["sudo", "-u", username, "bash", &install_script_path_chroot])
+        .args([
+            "sudo",
+            "-u",
+            username,
+            "bash",
+            install_script_path_chroot.to_str().unwrap(),
+        ])
         .run(command.dryrun)
         .context("Omarchy installation script failed.")?;
 
     info!("Restoring original ufw command...");
-    if !command.dryrun {
+    if !command.dryrun && ufw_real_path.exists() {
         fs::rename(&ufw_real_path, &ufw_path).context("Failed to restore real ufw binary")?;
     } else if command.dryrun {
         println!("mv {} {}", ufw_real_path.display(), ufw_path.display());

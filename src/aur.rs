@@ -38,6 +38,7 @@ impl AurHelper {
             Self::Yay => vec![
                 String::from("yay"),
                 String::from("-S"),
+                String::from("--noconfirm"),
                 String::from("--useask"),
                 String::from("--removemake"),
                 String::from("--norebuild"),
@@ -47,6 +48,7 @@ impl AurHelper {
                 String::from("None"),
                 String::from("--answerdiff"),
                 String::from("None"),
+                String::from("--needed"),
                 String::from("--mflags"),
                 String::from("--noconfirm"),
             ],
