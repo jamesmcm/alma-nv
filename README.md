@@ -8,10 +8,10 @@ rescue, privacy, penetration testing or anything else. There are some more gener
 but all of them are based on squashfs, meaning that changes don't persist reboots.
 
 ALMA is meant for those who wish to have a **mutable** live environment. It installs Arch
-Linux into a USB or an SD card, almost as if it was a hard drive. Some configuration is applied in
-order to minimize writes to the USB and making sure the system is bootable on both BIOS and UEFI systems.
+Linux into a USB, SD card, or image file, almost as if it was a hard drive. Configuration is applied
+to minimize writes and ensure the system is bootable on both BIOS and UEFI systems.
 
-Upgrading your packages is as easy as running `pacman -Syu` while the system is booted. This tool also provides an easy chroot command, so you can keep your live environment up to date without having to boot it. Encrypting the root partition is as easy as providing the `-e` flag.
+Upgrading your packages is as easy as running `pacman -Syu`. This tool also provides an easy `chroot` command, so you can keep your live environment up to date without having to boot it. Encrypting the root partition is as easy as providing the `-e` flag.
 
 ## Installation
 
@@ -21,24 +21,26 @@ You can either build the project using `cargo build --release` or install the [a
 
 ALMA must be run on Arch Linux (derivatives are not supported). Install these packages on the host before running `alma`:
 
-- arch-install-scripts (provides pacstrap, arch-chroot, genfstab)
-- gptfdisk (provides sgdisk)
-- dosfstools (provides mkfs.fat)
-- e2fsprogs (provides mkfs.ext4)
-- util-linux (provides losetup, blkid; typically part of base)
-- cryptsetup (only required when using `--encrypted-root`)
+- `arch-install-scripts` (provides pacstrap, arch-chroot, genfstab)
+- `gptfdisk` (provides sgdisk)
+- `dosfstools` (provides mkfs.fat)
+- `e2fsprogs` (provides mkfs.ext4)
+- `btrfs-progs` (required for BTRFS support)
+- `util-linux` (provides losetup, blkid, sfdisk; typically part of base)
+- `git` (required for presets and AUR helper installation)
+- `cryptsetup` (only required when using `--encrypted-root`)
 
 Quick install:
 
 ```bash
-sudo pacman -S --needed arch-install-scripts gptfdisk dosfstools e2fsprogs util-linux cryptsetup
+sudo pacman -S --needed arch-install-scripts gptfdisk dosfstools e2fsprogs btrfs-progs util-linux git cryptsetup
 ```
 
 Optional, for QEMU testing, see the QEMU section below.
 
 ### Using Docker (Cross-Platform)
 
-ALMA can run on any system using Docker, not just Arch Linux. This is useful for running ALMA on Fedora, macOS, or any other system with Docker installed.
+ALMA can run on any system using Docker. This is useful for running ALMA on Fedora, macOS, or any other system with Docker installed.
 
 #### Prerequisites
 
@@ -97,6 +99,22 @@ This command will wipe the entire disk and create a fresh, bootable installation
 
 If you do not specify a device path, ALMA will interactively prompt you to select one from a list of available removable devices.
 
+#### Interactive Setup
+
+When you run `alma create` without presets or the `--noconfirm` flag, you will be guided through an interactive setup wizard. This allows you to configure a username, password, hostname, timezone, graphics drivers, and fonts for your new system.
+
+### Installing to Another Disk (Cloning)
+
+Once you have a booted ALMA system, you can use the `install` command to "clone" it to another disk. This re-runs the original creation process (using a manifest saved on the system) to create a fresh installation on the target device.
+
+```bash
+# From a running ALMA system, install to /dev/sdb
+sudo alma install /dev/sdb
+
+# Optionally, copy /home and NetworkManager configs from the running system
+# (You will be prompted for this automatically)
+```
+
 ### Installing to Pre-existing Partitions
 
 ALMA can also install to a partition you've already created, which is useful for dual-booting or custom disk layouts.
@@ -109,7 +127,22 @@ sudo alma create --root-partition /dev/sdX5
 sudo alma create --root-partition /dev/sdX5 --boot-partition /dev/sdX1
 ```
 
-**Warning:** The partition specified with `--root-partition` will be **reformatted to ext4**, deleting all its contents.
+**Warning:** The partition specified with `--root-partition` will be **reformatted**, deleting all its contents.
+
+### System Variants and Filesystems
+
+ALMA supports different system variants and root filesystems.
+
+```bash
+# Create an Omarchy system (defaults to BTRFS)
+sudo alma create --system omarchy my-omarchy.img --image 8GiB
+
+# Create a standard Arch system with a BTRFS filesystem
+sudo alma create --filesystem btrfs my-btrfs.img --image 8GiB
+```
+
+- `--system`: `arch` (default) or `omarchy`.
+- `--filesystem`: `ext4` (default) or `btrfs`.
 
 ### Disk Encryption
 
@@ -119,7 +152,7 @@ You can enable full disk encryption (LUKS) for the root partition with the `-e` 
 sudo alma create -e /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
 ```
 
-You will be prompted to enter and confirm the encryption passphrase during image creation.
+You will be prompted to enter and confirm the encryption passphrase during creation.
 
 ### Creating a Raw Image File
 
@@ -132,7 +165,7 @@ sudo alma create --image 10GiB almatest.img
 
 ### Chrooting into an Installation
 
-After the installation is done, you can `chroot` into the environment to perform further customizations before the first boot.
+After the installation is done, you can `chroot` into the environment to perform further customizations before the first boot. ALMA will automatically detect partitions and filesystem types (ext4/btrfs/LUKS).
 
 ```bash
 sudo alma chroot /dev/disk/by-id/usb-Generic_USB_Flash_Disk-0:0
@@ -182,18 +215,7 @@ Preset files are simple TOML files which contain:
 - Environment variables required by the preset: `environment_variables = ["USERNAME"]`
 - A list of shared directories from the host to be made available inside the chroot: `shared_directories = ["configs"]`
 
-If a directory is provided, all `.toml` files within it are recursively crawled and executed in alphanumeric order. This allows you to structure complex installations, for example:
-
-```
-my_presets/
-├── 00-add_user.toml
-├── 10-xorg/
-│   ├── 00-install.toml
-│   └── 01-config.toml
-└── 20-i3/
-    ├── 00-install.toml
-    └── 01-copy_dotfiles.toml
-```
+If a directory is provided, all `.toml` files within it are recursively crawled and executed in alphanumeric order. This allows you to structure complex installations.
 
 ### Order of Execution
 
@@ -205,74 +227,133 @@ ALMA installs packages and runs preset scripts in the following order:
 4.  Preset scripts are executed one by one, in the alphanumeric order of their filenames.
 
 ## Full Command-Line Reference
+
 <details>
-<summary>Click to expand for all 'alma create' options</summary>
+<summary>Click to expand for all commands and options</summary>
 
 ```
-USAGE:
-    alma create [OPTIONS] [BLOCK_DEVICE | IMAGE]
+alma 0.3.0
+Arch Linux Mobile Appliance
 
-ARGS:
-    <BLOCK_DEVICE | IMAGE>
-            Either a path to a removable block device or a nonexisting file if --image is
-            specified
+USAGE:
+    alma [OPTIONS] <SUBCOMMAND>
 
 OPTIONS:
+    -h, --help       Print help information
+    -v, --verbose    Verbose output
+    -V, --version    Print version information
+
+SUBCOMMANDS:
+    create     Create a new Arch Linux bootable system
+    install    Install this system to another disk
+    chroot     Chroot into an existing ALMA system
+    qemu       Boot the ALMA system with Qemu
+    help       Print this message or the help of the given subcommand(s)
+```
+
+**`alma create`**
+```
+USAGE:
+    alma create [OPTIONS] [path]
+
+ARGS:
+    <path>    Path to a block device or a non-existing file if --image is specified
+
+OPTIONS:
+        --allow-non-removable
+            Allow installation on non-removable devices. Use with extreme caution!
+
+        --aur-helper <aur-helper>
+            The AUR helper to install for handling AUR packages
+
+            [default: paru]
+            [possible values: paru, yay]
+
+        --aur-packages <AUR_PACKAGE>
+            Additional packages to install from the AUR
+
+        --boot-partition <BOOT_PARTITION_PATH>
+            Path to a partition to use as the target boot partition - this will reformat the
+            partition to vfat and install GRUB. Should be used with --root-partition if you want to
+            install a bootloader to a pre-partitioned disk. If --root-partition is set, but this is
+            not, then no bootloader will be installed
+
+        --boot-size <SIZE_WITH_UNIT>
+            Boot partition size. Raw numbers are treated as MiB. [default: 300MiB]
+
+        --dryrun
+            Print commands instead of executing them
+
+    -e, --encrypted-root
+            Encrypt the root partition (highly recommended for Omarchy)
+
+    -p, --extra-packages <PACKAGE>
+            Additional packages to install from Pacman repos
+
+        --filesystem <filesystem>
+            The filesystem to use for the root partition
+
+            [default: ext4]
+            [possible values: ext4, btrfs]
+
     -h, --help
             Print help information
 
-    -v, --verbose
-            Verbose output
-
-    --root-partition <ROOT_PARTITION_PATH>
-            Path to a partition to use as the target root partition - this will reformat the
-            partition to ext4
-
-    --boot-partition <BOOT_PARTITION_PATH>
-            Path to a partition to use as the target boot partition - this will reformat the
-            partition to vfat and install GRUB
-
-    -c, --pacman-conf <PACMAN_CONF>
-            Path to a pacman.conf file which will be used to pacstrap packages into the image
-
-    -p, --extra-packages <PACKAGE>...
-            Additional packages to install from Pacman repos
-
-    --aur-packages <AUR_PACKAGE>...
-            Additional packages to install from the AUR
-
-    --boot-size <SIZE_WITH_UNIT>
-            Boot partition size. If a raw number is given, it is treated as MiB
-            [default: 300MiB]
+        --image <SIZE_WITH_UNIT>
+            Create a raw image file instead of using a block device
 
     -i, --interactive
             Enter interactive chroot before unmounting the drive
 
-    -e, --encrypted-root
-            Encrypt the root partition
+        --noconfirm
+            Do not ask for confirmation (not supported for Omarchy or encryption)
 
-    --presets <PRESETS_PATH>...
-            Paths to preset files or directories (local, http(s) zip/tar.gz, or git repository)
-
-    --image <SIZE_WITH_UNIT>
-            Create an image with a certain size in the given path instead of using an actual block device
-
-    --overwrite
+        --overwrite
             Overwrite existing image files. Use with caution!
 
-    --allow-non-removable
-            Allow installation on non-removable devices. Use with extreme caution!
+    -c, --pacman-conf <PACMAN_CONF>
+            Path to a pacman.conf file which will be used to pacstrap packages into the image. This
+            pacman.conf will also be copied into the resulting Arch Linux image
 
-    --aur-helper <AUR_HELPER>
-            The AUR helper to install for handling AUR packages
-            [default: paru] [possible values: paru, yay]
+        --presets <PRESETS_PATH>
+            Paths to preset files/dirs (local, http(s) zip/tar.gz, or git repo)
 
-    --noconfirm
-            Do not ask for confirmation for any steps (for non-interactive use)
+        --root-partition <ROOT_PARTITION_PATH>
+            Path to a partition to use as the target root partition - this will reformat the
+            partition. Should be used when you do not want to repartition and wipe the entire disk
+            (e.g. dual-booting). If it is not set, then the entire disk will be repartitioned and
+            wiped. If it is set, but --boot-partition is not, then the partition will be mounted as /
+            and /boot will not be modified
 
-    --dryrun
-            Do not run any commands, just print them to stdfout
+        --system <system>
+            The Linux system variant to install
+
+            [default: arch]
+            [possible values: arch, omarchy]
 ```
+
+**`alma install`**
+```
+USAGE:
+    alma install [OPTIONS] [target_device]
+
+ARGS:
+    <target_device>
+            The target block device to install to. If not provided, you will be prompted.
+            Incompatible with --root-partition
+
+OPTIONS:
+        --allow-non-removable    Allow installation on non-removable devices. Use with extreme
+                                 caution!
+        --boot-partition <BOOT_PARTITION_PATH>
+            Path to a pre-existing EFI partition to use for the bootloader
+    -h, --help                   Print help information
+        --noconfirm              Do not ask for confirmation for any steps
+        --root-partition <ROOT_PARTITION_PATH>
+            Path to a pre-existing partition to use as the root filesystem. This is for installing
+            alongside other OSes (e.g., Windows)
+```
+
 </details>
 
 ## Troubleshooting
@@ -296,3 +377,4 @@ This can sometimes happen on disks with unusual partition tables. Delete all par
 ## Useful Resources
 
 - [Arch Wiki: Installing Arch Linux on a USB key](https://wiki.archlinux.org/index.php/Install_Arch_Linux_on_a_USB_key)
+```
