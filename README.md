@@ -190,6 +190,15 @@ sudo losetup -fP --show almatest.img
 sudo alma qemu /dev/loop0
 ```
 
+With a USB device (`edk2-ovmf` is required):
+
+```bash
+sudo pacman -S qemu-desktop edk2-ovmf
+
+# Boot a physical device
+sudo alma qemu /dev/sda
+```
+
 ## Presets
 
 Reproducing a build can be easily done using preset files. Presets are powerful TOML files that let you define packages to install, scripts to run, and more.
