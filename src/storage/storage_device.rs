@@ -1,6 +1,8 @@
+// src/storage/storage_device.rs
 use super::markers::{BlockDevice, Origin};
 use super::partition::Partition;
 use anyhow::{Context, anyhow};
+use byte_unit::Byte;
 use log::debug;
 use std::fs::read_to_string;
 use std::marker::PhantomData;
@@ -10,6 +12,7 @@ use std::path::{Path, PathBuf};
 pub struct StorageDevice<'a> {
     name: String,
     path: PathBuf,
+    size: Byte,
     origin: PhantomData<&'a dyn Origin>,
     mount_config: Vec<MountConfig>,
     dryrun: bool,
@@ -42,12 +45,23 @@ impl<'a> StorageDevice<'a> {
 
         debug!("real path: {path:?}, device name: {device_name:?}");
 
+        let size = {
+            let size_in_sectors: u128 = read_to_string(format!("/sys/block/{}/size", device_name))
+                .with_context(|| format!("Failed to read size for device {device_name}"))?
+                .trim()
+                .parse()
+                .with_context(|| format!("Failed to parse size for device {device_name}"))?;
+            Byte::from_u128(size_in_sectors * 512)
+                .ok_or_else(|| anyhow!("Block device size is too large to represent"))?
+        };
+
         let path_as_str = path.to_str().context("Unable to get the path as &str ")?;
         let mount_config = Self::get_mount_point(path_as_str)?;
 
         let _self = Self {
             name: device_name,
             path,
+            size,
             origin: PhantomData,
             mount_config,
             dryrun,
@@ -130,6 +144,10 @@ impl<'a> StorageDevice<'a> {
 
     pub fn is_mounted(&self) -> bool {
         !self.mount_config.is_empty()
+    }
+
+    pub fn size(&self) -> Byte {
+        self.size
     }
 
     // Code from @assapir - can we do this without manually reading mounts file?
