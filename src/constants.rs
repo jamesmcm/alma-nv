@@ -5,6 +5,10 @@ pub const MIN_BOOT_MB: u32 = 200;
 pub const DEFAULT_BOOT_MB: u32 = 300;
 pub const MAX_BOOT_MB: u32 = 2048; // 2GiB
 
+pub const OMARCHY_DEFAULT_BOOT_MB: u32 = 512;
+pub const OMARCHY_MIN_BOOT_MB: u32 = 512;
+pub const OMARCHY_MIN_TOTAL_GIB: u64 = 15;
+
 pub static JOURNALD_CONF: &str = "
 [Journal]
 Storage=volatile

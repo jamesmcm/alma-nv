@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use super::presets::PresetsPath;
 
+/// Parse size argument as bytes e.g. 10GB, 10GiB, etc.
+/// If a raw number is given, it is treated as MiB.
 fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
+    // If the input is just a number, treat it as MiB
     if let Ok(val) = src.parse::<u128>() {
         let mib_in_bytes = val * 1024 * 1024;
         return Byte::from_u128(mib_in_bytes).ok_or_else(|| {
@@ -18,6 +21,7 @@ fn parse_bytes(src: &str) -> anyhow::Result<Byte> {
             )
         });
     }
+    // Otherwise, parse it as a string with units (e.g., "500GiB")
     Byte::parse_str(src, true).map_err(|e| anyhow!("Invalid image size, error: {:?}", e))
 }
 
@@ -71,11 +75,10 @@ impl fmt::Display for SystemVariant {
 
 #[derive(ValueEnum, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum FilesystemTypeArg {
+pub enum RootFilesystemType {
     #[default]
     Ext4,
     Btrfs,
-    Vfat,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -89,18 +92,24 @@ pub struct CreateCommand {
     pub system: SystemVariant,
 
     /// The filesystem to use for the root partition
-    #[clap(long, value_enum, default_value_t = FilesystemTypeArg::Ext4)]
-    pub filesystem: FilesystemTypeArg,
+    #[clap(long, value_enum, default_value_t = RootFilesystemType::Ext4)]
+    pub filesystem: RootFilesystemType,
 
-    /// Path to a partition to use as the target root partition
+    /// Path to a partition to use as the target root partition - this will reformat the partition.
+    /// Should be used when you do not want to repartition and wipe the entire disk (e.g. dual-booting).
+    /// If it is not set, then the entire disk will be repartitioned and wiped.
+    /// If it is set, but --boot-partition is not, then the partition will be mounted as / and /boot will not be modified.
     #[clap(long = "root-partition", value_name = "ROOT_PARTITION_PATH")]
     pub root_partition: Option<PathBuf>,
 
-    /// Path to a partition to use as the target boot partition
+    /// Path to a partition to use as the target boot partition - this will reformat the partition to vfat and install GRUB.
+    /// Should be used with --root-partition if you want to install a bootloader to a pre-partitioned disk.
+    /// If --root-partition is set, but this is not, then no bootloader will be installed.
     #[clap(long = "boot-partition", value_name = "BOOT_PARTITION_PATH")]
     pub boot_partition: Option<PathBuf>,
 
-    /// Path to a pacman.conf file to use
+    /// Path to a pacman.conf file which will be used to pacstrap packages into the image.
+    /// This pacman.conf will also be copied into the resulting Arch Linux image.
     #[clap(short = 'c', long = "pacman-conf", value_name = "PACMAN_CONF")]
     pub pacman_conf: Option<PathBuf>,
 
@@ -212,7 +221,7 @@ pub struct QemuCommand {
 pub struct Manifest {
     pub alma_version: String,
     pub system_variant: SystemVariant,
-    pub filesystem: FilesystemTypeArg,
+    pub filesystem: RootFilesystemType,
     pub encrypted_root: bool,
     pub aur_helper: String,
     pub original_command: String,
@@ -224,4 +233,79 @@ pub struct Source {
     pub r#type: String,      // "preset" or "system"
     pub origin: String,      // URL or original local path
     pub baked_path: PathBuf, // Path inside the image
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_byte_parsing() {
+        let app_parse = App::try_parse_from(["alma", "create", "--image", "500MiB", "/path/test"]);
+        match app_parse {
+            Err(e) => {
+                println!("{e}");
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    let path = PathBuf::from_str("/path/test").unwrap();
+
+                    assert_eq!(
+                        cmd.image,
+                        Some(Byte::from_u128_with_unit(500, byte_unit::Unit::MiB).unwrap())
+                    );
+                    assert_eq!(cmd.path, Some(path));
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_byte_parsing_case_insensitive() {
+        let app_parse = App::try_parse_from(["alma", "create", "--image", "500mb", "/path/test"]);
+        match app_parse {
+            Err(e) => {
+                println!("{e}");
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    let path = PathBuf::from_str("/path/test").unwrap();
+
+                    assert_eq!(
+                        cmd.image,
+                        Some(Byte::from_u128_with_unit(500, byte_unit::Unit::MB).unwrap())
+                    );
+                    assert_eq!(cmd.path, Some(path));
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_byte_parsing_no_unit() {
+        let app_parse = App::try_parse_from(["alma", "create", "--boot-size", "500", "/path/test"]);
+        match app_parse {
+            Err(e) => {
+                println!("{e}");
+                panic!("arg parsing failed");
+            }
+            Ok(app) => {
+                if let Command::Create(cmd) = app.cmd {
+                    assert_eq!(
+                        cmd.boot_size,
+                        Some(Byte::from_u128(500 * 1024 * 1024).unwrap())
+                    );
+                } else {
+                    panic!("was not Create command")
+                }
+            }
+        }
+    }
 }

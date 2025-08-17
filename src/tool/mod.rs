@@ -30,7 +30,7 @@ impl Tool {
     }
 }
 
-use crate::args::{CreateCommand, FilesystemTypeArg};
+use crate::args::{CreateCommand, RootFilesystemType};
 
 pub struct Tools {
     pub sgdisk: Tool,
@@ -38,7 +38,7 @@ pub struct Tools {
     pub arch_chroot: Tool,
     pub genfstab: Tool,
     pub mkfat: Tool,
-    pub mkext4: Tool,
+    pub mkext4: Option<Tool>,
     pub mkbtrfs: Option<Tool>,
     pub btrfs: Option<Tool>,
     pub git: Tool,
@@ -50,7 +50,7 @@ impl Tools {
     pub fn new(command: &CreateCommand) -> anyhow::Result<Self> {
         let dryrun = command.dryrun;
         let encrypted = command.encrypted_root;
-        let is_btrfs = matches!(command.filesystem, FilesystemTypeArg::Btrfs);
+        let is_btrfs = matches!(command.filesystem, RootFilesystemType::Btrfs);
 
         Ok(Self {
             sgdisk: Tool::find("sgdisk", dryrun).map_err(|_| {
@@ -68,10 +68,14 @@ impl Tools {
             mkfat: Tool::find("mkfs.fat", dryrun).map_err(|_| {
                 anyhow!("mkfs.fat is required for creating FAT filesystems. Please install the 'dosfstools' package.")
             })?,
-            // TODO: Technically don't need ext4 if only using btrfs
-            mkext4: Tool::find("mkfs.ext4", dryrun).map_err(|_| {
+            // TODO: Adapt this for more filesystem types
+            mkext4: if !is_btrfs {
+                Some(Tool::find("mkfs.ext4", dryrun).map_err(|_| {
                 anyhow!("mkfs.ext4 is required for creating ext4 filesystems. Please install the 'e2fsprogs' package.")
-            })?,
+            })?)
+            } else {
+                None
+            },
             mkbtrfs: if is_btrfs {
                 Some(Tool::find("mkfs.btrfs", dryrun).map_err(|_| {
                 anyhow!("mkfs.btrfs is required for creating btrfs filesystems. Please install the 'btrfs-progs' package.")

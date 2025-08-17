@@ -12,19 +12,20 @@ use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use log::{debug, info, warn};
 use nix::mount::MsFlags;
 
-use crate::args::{CreateCommand, FilesystemTypeArg, Manifest, Source, SystemVariant};
+use crate::args::{CreateCommand, Manifest, RootFilesystemType, Source, SystemVariant};
 use crate::constants::{self, OMARCHY_REPO_URL};
-use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB};
+use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB, OMARCHY_MIN_TOTAL_GIB};
 use crate::initcpio;
 use crate::interactive::UserSettings;
 use crate::presets::{PathWrapper, PresetsCollection, Script};
 use crate::process::CommandExt;
+use crate::storage::filesystem::FilesystemType;
 use crate::storage::{
     self, BlockDevice, EncryptedDevice, Filesystem, LoopDevice, MountStack, StorageDevice,
     partition::Partition,
 };
-use crate::tool::Tools;
-use crate::tool::{Tool, mount};
+use crate::tool::mount;
+use crate::tool::{Tool, Tools};
 use tempfile::TempDir;
 
 fn fix_fstab(fstab: &str) -> String {
@@ -38,7 +39,7 @@ fn fix_fstab(fstab: &str) -> String {
 pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     // --- Initial Command Validation & Adjustments ---
     validate_command(&command)?;
-    adjust_command_for_system(&mut command);
+    adjust_command_for_system(&mut command)?;
     // We only prompt for user settings if we are NOT in non-interactive mode.
     let user_settings: Option<UserSettings> = if !command.noconfirm {
         Some(UserSettings::prompt()?)
@@ -88,6 +89,41 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         command.dryrun,
     )?;
 
+    // Check total device/image size for Omarchy
+    if command.system == SystemVariant::Omarchy {
+        let min_total_bytes =
+            byte_unit::Byte::from_u64_with_unit(OMARCHY_MIN_TOTAL_GIB, byte_unit::Unit::GiB)
+                .unwrap()
+                .as_u128();
+
+        let total_size = if let Some(image_size) = command.image {
+            image_size
+        } else {
+            storage_device.size()
+        };
+
+        if total_size.as_u128() < min_total_bytes {
+            warn!(
+                "The selected device/image size ({}) is less than the recommended minimum of {} for Omarchy.",
+                total_size.get_appropriate_unit(byte_unit::UnitType::Both),
+                byte_unit::Byte::from_u128(min_total_bytes)
+                    .expect("Failed to convert min_total_bytes")
+                    .get_appropriate_unit(byte_unit::UnitType::Both)
+            );
+            if !command.noconfirm {
+                let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Do you want to continue with this size?")
+                    .default(false)
+                    .interact()?;
+                if !confirmed {
+                    return Err(anyhow!(
+                        "User aborted operation due to insufficient device size for Omarchy."
+                    ));
+                }
+            }
+        }
+    }
+
     // 4. Safety checks and partitioning
     confirm_and_wipe_device(&mut storage_device, &command)?;
     let (boot_partition, root_partition_base) =
@@ -106,10 +142,9 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     let root_block_device: &dyn BlockDevice = encrypted_root
         .as_ref()
         .map_or(&root_partition_base, |e| e as &dyn BlockDevice);
-    let root_fs_type = command.filesystem;
+    let root_fs_type: FilesystemType = command.filesystem.into();
 
-    // --- NEW: Handle BTRFS subvolume setup ---
-    if root_fs_type == FilesystemTypeArg::Btrfs {
+    if root_fs_type == FilesystemType::Btrfs {
         setup_btrfs_subvolumes(
             root_block_device,
             tools.mkbtrfs.as_ref().ok_or_else(|| {
@@ -121,13 +156,16 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
             command.dryrun,
         )?;
     } else {
-        Filesystem::format(root_block_device, root_fs_type, &tools.mkext4)?;
+        Filesystem::format(
+            root_block_device,
+            root_fs_type,
+            tools.mkext4.as_ref().context("mkfs.ext4 tool missing")?,
+        )?;
     }
-    // --- END NEW ---
 
     let boot_filesystem = boot_partition
         .as_ref()
-        .map(|p| Filesystem::from_partition(p, FilesystemTypeArg::Vfat));
+        .map(|p| Filesystem::from_partition(p, FilesystemType::Vfat));
     let root_filesystem = Filesystem::from_partition(root_block_device, root_fs_type);
 
     // 6. Bootstrap system
@@ -258,12 +296,40 @@ fn validate_command(command: &CreateCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn adjust_command_for_system(command: &mut CreateCommand) {
-    // TODO: Do we want this? Maybe just warn if ext4 ?
+fn adjust_command_for_system(command: &mut CreateCommand) -> anyhow::Result<()> {
     if command.system == SystemVariant::Omarchy {
-        info!("System variant 'Omarchy' selected. Overriding filesystem to BTRFS.");
-        command.filesystem = FilesystemTypeArg::Btrfs;
+        let user_set_fs = env::args().any(|arg| arg.starts_with("--filesystem"));
+        if user_set_fs && command.filesystem == RootFilesystemType::Ext4 {
+            warn!("You have selected the ext4 filesystem for an Omarchy installation.");
+            warn!(
+                "Omarchy is designed and tested with BTRFS and may not function correctly with ext4."
+            );
+            if !command.noconfirm {
+                let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Are you sure you want to proceed with ext4?")
+                    .default(false)
+                    .interact()?;
+                if !confirmed {
+                    return Err(anyhow!(
+                        "User aborted due to filesystem mismatch for Omarchy."
+                    ));
+                }
+            }
+        // User confirmed, so we leave it as ext4.
+        } else {
+            if !user_set_fs {
+                info!("System variant 'Omarchy' selected. Overriding filesystem to BTRFS.");
+            }
+            command.filesystem = RootFilesystemType::Btrfs;
+        }
+
+        let user_set_aur_helper = env::args().any(|arg| arg.starts_with("--aur-helper"));
+        if !user_set_aur_helper {
+            info!("Omarchy selected. Defaulting AUR helper to 'yay'.");
+            command.aur_helper = crate::aur::AurHelper::Yay;
+        }
     }
+    Ok(())
 }
 
 fn resolve_device_path_and_image(
@@ -362,11 +428,36 @@ fn partition_and_format<'a>(
     tools: &Tools,
     storage_device: &'a StorageDevice,
 ) -> anyhow::Result<(Option<Partition<'a>>, Partition<'a>)> {
+    let default_boot_mb = if command.system == SystemVariant::Omarchy {
+        constants::OMARCHY_DEFAULT_BOOT_MB
+    } else {
+        DEFAULT_BOOT_MB
+    };
+
     let boot_size_mb = command
         .boot_size
-        .map_or(DEFAULT_BOOT_MB, |b| (b.as_u128() / 1_048_576) as u32);
+        .map_or(default_boot_mb, |b| (b.as_u128() / 1_048_576) as u32);
 
-    if !(MIN_BOOT_MB..=MAX_BOOT_MB).contains(&boot_size_mb) {
+    if command.system == SystemVariant::Omarchy {
+        if boot_size_mb < constants::OMARCHY_MIN_BOOT_MB {
+            warn!(
+                "The specified boot partition size ({} MiB) is less than the recommended minimum of {} MiB for Omarchy.",
+                boot_size_mb,
+                constants::OMARCHY_MIN_BOOT_MB
+            );
+            if !command.noconfirm {
+                let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Continuing may cause boot issues. Do you want to proceed?")
+                    .default(false)
+                    .interact()?;
+                if !confirmed {
+                    return Err(anyhow!(
+                        "User aborted operation due to small boot partition size for Omarchy."
+                    ));
+                }
+            }
+        }
+    } else if !(MIN_BOOT_MB..=MAX_BOOT_MB).contains(&boot_size_mb) {
         warn!(
             "The specified boot partition size ({boot_size_mb} MiB) is outside the recommended range of {MIN_BOOT_MB} MiB to {MAX_BOOT_MB} MiB."
         );
@@ -403,7 +494,7 @@ fn partition_and_format<'a>(
     };
 
     if let Some(bp) = &boot_partition {
-        Filesystem::format(bp, FilesystemTypeArg::Vfat, &tools.mkfat)?;
+        Filesystem::format(bp, FilesystemType::Vfat, &tools.mkfat)?;
     }
 
     if command.encrypted_root {
@@ -498,8 +589,7 @@ fn bootstrap_system<'a>(
         );
     }
 
-    // --- NEW: Add packages based on Filesystem Choice ---
-    if command.filesystem == FilesystemTypeArg::Btrfs {
+    if command.filesystem == RootFilesystemType::Btrfs {
         info!("Adding btrfs-progs for Btrfs filesystem...");
         packages.insert("btrfs-progs".to_string());
     }
@@ -645,7 +735,13 @@ fn install_omarchy(
             &copy_options,
         )?;
 
-        info!("Setting ownership of Omarchy scripts for user '{username}'");
+        // Copy firewall.sh to user home dir
+        let firewall_src_path = baked_omarchy_dir.join("firewall.sh");
+        let firewall_dest_path = mount_path.join("home").join(username).join("firewall.sh");
+        info!("Copying firewall.sh to user's home directory.");
+        fs::copy(&firewall_src_path, &firewall_dest_path)?;
+
+        info!("Setting ownership of Omarchy scripts and firewall.sh for user '{username}'");
         tools
             .arch_chroot
             .execute()
@@ -655,6 +751,16 @@ fn install_omarchy(
                 "-R",
                 &format!("{username}:{username}"),
                 &format!("/home/{username}/.local"),
+            ])
+            .run(command.dryrun)?;
+        tools
+            .arch_chroot
+            .execute()
+            .arg(mount_path)
+            .args([
+                "chown",
+                &format!("{username}:{username}"),
+                &format!("/home/{username}/firewall.sh"),
             ])
             .run(command.dryrun)?;
     } else {
@@ -690,7 +796,7 @@ exit 0
 
     // 1. Rename the real ufw and create the wrapper
     info!("Wrapping ufw command to make it chroot-safe...");
-    if !command.dryrun && ufw_path.exists() {
+    if !command.dryrun {
         fs::rename(&ufw_path, &ufw_real_path).context("Failed to move real ufw binary")?;
         fs::write(&ufw_path, wrapper_script).context("Failed to write ufw wrapper script")?;
         fs::set_permissions(
@@ -726,7 +832,7 @@ exit 0
         .context("Omarchy installation script failed.")?;
 
     info!("Restoring original ufw command...");
-    if !command.dryrun && ufw_real_path.exists() {
+    if !command.dryrun {
         fs::rename(&ufw_real_path, &ufw_path).context("Failed to restore real ufw binary")?;
     } else if command.dryrun {
         println!("mv {} {}", ufw_real_path.display(), ufw_path.display());

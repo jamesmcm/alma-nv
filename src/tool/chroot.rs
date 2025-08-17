@@ -1,10 +1,10 @@
 use super::Tool;
 use super::mount;
 use crate::args;
-use crate::args::FilesystemTypeArg;
 use crate::constants::{BOOT_PARTITION_INDEX, ROOT_PARTITION_INDEX};
 use crate::process::CommandExt;
 use crate::storage;
+use crate::storage::filesystem::FilesystemType;
 use crate::storage::{BlockDevice, Filesystem, LoopDevice};
 use crate::storage::{EncryptedDevice, is_encrypted_device};
 use anyhow::Context;
@@ -38,7 +38,7 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
 
     // TODO: Here we assume fixed indexes for boot and root partitions - may not be the case for custom partitions
     let boot_partition = storage_device.get_partition(BOOT_PARTITION_INDEX)?;
-    let boot_filesystem = Filesystem::from_partition(&boot_partition, FilesystemTypeArg::Vfat);
+    let boot_filesystem = Filesystem::from_partition(&boot_partition, FilesystemType::Vfat);
 
     let root_partition_base = storage_device.get_partition(ROOT_PARTITION_INDEX)?;
     let encrypted_root = if is_encrypted_device(&root_partition_base)? {
@@ -57,7 +57,8 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
     } else {
         &root_partition_base as &dyn BlockDevice
     };
-    let root_filesystem = Filesystem::from_partition(root_partition, FilesystemTypeArg::Ext4);
+    // TODO: Auto-detect filesystem type instead of assuming ext4
+    let root_filesystem = Filesystem::from_partition(root_partition, FilesystemType::Ext4);
 
     let boot_sys = Some(boot_filesystem);
     let mount_stack = mount(mount_point.path(), &boot_sys, &root_filesystem, false)?;

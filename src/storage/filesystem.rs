@@ -1,34 +1,50 @@
 use super::markers::BlockDevice;
-use crate::{args::FilesystemTypeArg, process::CommandExt, tool::Tool};
+use crate::{args::RootFilesystemType, process::CommandExt, tool::Tool};
 use anyhow::Context;
 
-impl FilesystemTypeArg {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesystemType {
+    Ext4,
+    Btrfs,
+    Vfat,
+}
+
+impl From<RootFilesystemType> for FilesystemType {
+    fn from(fs: RootFilesystemType) -> Self {
+        match fs {
+            RootFilesystemType::Ext4 => FilesystemType::Ext4,
+            RootFilesystemType::Btrfs => FilesystemType::Btrfs,
+        }
+    }
+}
+
+impl FilesystemType {
     pub fn to_mount_type(self) -> &'static str {
         match self {
-            FilesystemTypeArg::Ext4 => "ext4",
-            FilesystemTypeArg::Btrfs => "btrfs",
-            FilesystemTypeArg::Vfat => "vfat",
+            FilesystemType::Ext4 => "ext4",
+            FilesystemType::Btrfs => "btrfs",
+            FilesystemType::Vfat => "vfat",
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Filesystem<'a> {
-    fs_type: FilesystemTypeArg,
+    fs_type: FilesystemType,
     block: &'a dyn BlockDevice,
 }
 
 impl<'a> Filesystem<'a> {
     pub fn format(
         block: &'a dyn BlockDevice,
-        fs_type: FilesystemTypeArg,
+        fs_type: FilesystemType,
         mkfs: &Tool,
     ) -> anyhow::Result<Self> {
         let mut command = mkfs.execute();
         match fs_type {
-            FilesystemTypeArg::Ext4 => command.arg("-F").arg(block.path()),
-            FilesystemTypeArg::Btrfs => command.arg("-f").arg(block.path()),
-            FilesystemTypeArg::Vfat => command.arg("-F32").arg(block.path()),
+            FilesystemType::Ext4 => command.arg("-F").arg(block.path()),
+            FilesystemType::Btrfs => command.arg("-f").arg(block.path()),
+            FilesystemType::Vfat => command.arg("-F32").arg(block.path()),
         };
 
         command.run(mkfs.dryrun).with_context(|| {
@@ -42,7 +58,7 @@ impl<'a> Filesystem<'a> {
         Ok(Self { fs_type, block })
     }
 
-    pub fn from_partition(block: &'a dyn BlockDevice, fs_type: FilesystemTypeArg) -> Self {
+    pub fn from_partition(block: &'a dyn BlockDevice, fs_type: FilesystemType) -> Self {
         Self { fs_type, block }
     }
 
@@ -50,7 +66,7 @@ impl<'a> Filesystem<'a> {
         self.block
     }
 
-    pub fn fs_type(&self) -> FilesystemTypeArg {
+    pub fn fs_type(&self) -> FilesystemType {
         self.fs_type
     }
 }

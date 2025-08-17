@@ -1,5 +1,5 @@
 mod crypt;
-mod filesystem;
+pub mod filesystem;
 mod loop_device;
 mod markers;
 mod mount_stack;

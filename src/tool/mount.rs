@@ -1,4 +1,4 @@
-use crate::args::FilesystemTypeArg;
+use crate::storage::filesystem::FilesystemType;
 use crate::storage::{Filesystem, MountStack};
 use anyhow::Context;
 use log::info;
@@ -6,6 +6,9 @@ use nix::mount::MsFlags;
 use std::fs;
 use std::path::Path;
 
+/// Mounts root filesystem to given mount_path
+/// Mounts boot filesystem to mount_path/boot
+/// Note we mount with noatime to reduce disk writes by not recording file access times
 pub fn mount<'a>(
     mount_path: &Path,
     boot_filesystem: &'a Option<Filesystem>,
@@ -16,7 +19,7 @@ pub fn mount<'a>(
     let root_device_path = root_filesystem.block().path();
     info!("Mounting filesystems to {}", mount_path.display());
 
-    if root_filesystem.fs_type() == FilesystemTypeArg::Btrfs {
+    if root_filesystem.fs_type() == FilesystemType::Btrfs {
         // --- BTRFS Subvolume Mounting Logic ---
         // For Btrfs, we pass subvol options via the `data` parameter.
         let common_flags = MsFlags::MS_NOATIME;
