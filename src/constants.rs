@@ -35,7 +35,16 @@ pub const BASE_PACKAGES: [&str; 13] = [
 // AUR dependencies for installing AUR helper
 pub const AUR_DEPENDENCIES: [&str; 1] = ["sudo"];
 
-pub const OMARCHY_REPO_URL: &str = "https://github.com/basecamp/omarchy.git";
+pub const OMARCHY_DEFAULT_REPO: &str = "https://github.com/basecamp/omarchy.git";
+pub const OMARCHY_DEFAULT_BRANCH: &str = "master";
+
+pub fn omarchy_repo_url() -> String {
+    std::env::var("OMARCHY_REPO").unwrap_or_else(|_| OMARCHY_DEFAULT_REPO.to_string())
+}
+
+pub fn omarchy_branch() -> String {
+    std::env::var("OMARCHY_REF").unwrap_or_else(|_| OMARCHY_DEFAULT_BRANCH.to_string())
+}
 
 pub const FONT_PACKAGES: &[(&str, &[&str])] = &[
     (

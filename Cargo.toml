@@ -24,7 +24,7 @@ toml = "0.9"
 byte-unit = "5"
 nix = { version = "0.30", features = ["mount"] }
 pretty_env_logger = "0.5"
-dialoguer = "0.11"
+dialoguer = "0.12"
 console = "0.16"
 anyhow = "1"
 strum = { version = "0.27", features = ["derive", "strum_macros"] }
