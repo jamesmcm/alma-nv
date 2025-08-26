@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use byte_unit::Byte;
 use console::style;
+use dialoguer::Input;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use log::{debug, info, warn};
 use nix::mount::MsFlags;
 
 use crate::args::{CreateCommand, Manifest, RootFilesystemType, Source, SystemVariant};
-use crate::constants::{self, OMARCHY_REPO_URL};
+use crate::aur::AurHelper;
+use crate::constants::{self, omarchy_branch, omarchy_repo_url};
 use crate::constants::{DEFAULT_BOOT_MB, MAX_BOOT_MB, MIN_BOOT_MB, OMARCHY_MIN_TOTAL_GIB};
 use crate::initcpio;
 use crate::interactive::UserSettings;
@@ -703,7 +705,9 @@ fn bake_sources_into_image(
             .git
             .execute()
             .arg("clone")
-            .arg(OMARCHY_REPO_URL)
+            .arg("-b")
+            .arg(omarchy_branch())
+            .arg(omarchy_repo_url())
             .arg(&omarchy_baked_path)
             .run(command.dryrun)?;
     }
@@ -743,7 +747,7 @@ fn install_omarchy(
         let firewall_src_path = target_omarchy_base_dir_host
             .join("omarchy")
             .join("install")
-            .join("development")
+            .join("first-run")
             .join("firewall.sh");
         let firewall_dest_path = user_home_dir_host.join("firewall.sh");
         info!("Copying firewall.sh to user's home directory.");
@@ -771,7 +775,7 @@ fn install_omarchy(
         let firewall_src_path = target_omarchy_base_dir_host
             .join("omarchy")
             .join("install")
-            .join("development")
+            .join("first-run")
             .join("firewall.sh");
         let firewall_dest_path = user_home_dir_host.join("firewall.sh");
         println!(
@@ -781,6 +785,16 @@ fn install_omarchy(
         );
     }
 
+    let git_name = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter your full name (for git config)".to_string())
+        .default(username.to_string())
+        .interact_text()?;
+
+    let git_email = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter your email address (for git config)".to_string())
+        .default(String::new())
+        .interact_text()?;
+
     info!("Patching Omarchy scripts to remove systemctl '--now' flag...");
     let patch_command = format!(
         "find /home/{username}/.local/share/omarchy -type f -name '*.sh' -print0 | xargs -0 sed -i \
@@ -789,6 +803,20 @@ fn install_omarchy(
             -e 's/^reboot/# reboot (disabled in chroot)/g' \
             -e 's/sudo ufw reload/# sudo ufw reload (disabled in chroot)/g'",
     );
+
+    // If we already installed yay-bin, then make sure Omarchy does not install yay (source package)
+    if matches!(command.aur_helper, AurHelper::Yay) {
+        // Remove yay from install/packages.sh
+        let remove_yay_command = format!(
+            "sed -i '/^\\s*yay\\s*\\\\/d' /home/{username}/.local/share/omarchy/install/packages.sh"
+        );
+        tools
+            .arch_chroot
+            .execute()
+            .arg(mount_path)
+            .args(["bash", "-c", &remove_yay_command])
+            .run(command.dryrun)?;
+    }
 
     let ufw_path = mount_path.join("usr/bin/ufw");
     let ufw_real_path = mount_path.join("usr/bin/ufw.real");
@@ -834,18 +862,34 @@ exit 0
 
     info!("Running patched Omarchy install script as user '{username}'. This will be interactive.");
 
-    // Use `sudo -u` to run the command as the specified user.
+    let repo_url = omarchy_repo_url();
+    let branch = omarchy_branch();
+
+    let mut env_vars = vec![
+        "OMARCHY_CHROOT_INSTALL=1".to_string(),
+        format!("OMARCHY_USER_NAME={}", git_name),
+        format!("OMARCHY_USER_EMAIL={}", git_email),
+    ];
+
+    // Add OMARCHY_REPO if it's not the default
+    if repo_url != constants::OMARCHY_DEFAULT_REPO {
+        env_vars.push(format!("OMARCHY_REPO={}", repo_url));
+    }
+
+    // Add OMARCHY_REF if it's not the default
+    if branch != constants::OMARCHY_DEFAULT_BRANCH {
+        env_vars.push(format!("OMARCHY_REF={}", branch));
+    }
+
+    let mut args = vec!["sudo", "-u", username, "env"];
+    args.extend(env_vars.iter().map(|s| s.as_str()));
+    args.extend_from_slice(&["bash", install_script_path_chroot.to_str().unwrap()]);
+
     tools
         .arch_chroot
         .execute()
         .arg(mount_path)
-        .args([
-            "sudo",
-            "-u",
-            username,
-            "bash",
-            install_script_path_chroot.to_str().unwrap(),
-        ])
+        .args(args)
         .run(command.dryrun)
         .context("Omarchy installation script failed.")?;
 
@@ -869,7 +913,7 @@ fn generate_manifest(
     if command.system == SystemVariant::Omarchy {
         sources.push(Source {
             r#type: "system".to_string(),
-            origin: OMARCHY_REPO_URL.to_string(),
+            origin: omarchy_repo_url(),
             baked_path: PathBuf::from("/usr/share/omarchy"),
         });
     }
