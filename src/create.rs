@@ -31,6 +31,8 @@ use crate::tool::mount;
 use crate::tool::{Tool, Tools};
 use tempfile::TempDir;
 
+const PACSTRAP_MAX_ATTEMPTS: usize = 5;
+
 fn fix_fstab(fstab: &str) -> String {
     fstab
         .lines()
@@ -92,9 +94,13 @@ fn configure_omarchy_pacman_conf(
     let hook_dir = omarchy_conf_dir.join("bootstrap-hooks");
     neutralize_limine_hooks(&hook_dir)?;
     let bootstrap_conf = omarchy_conf_dir.join("pacman-omarchy-bootstrap.conf");
+    let bootstrap_content = add_pacman_options(
+        &content,
+        &["DisableDownloadTimeout", "ParallelDownloads = 1"],
+    );
     let bootstrap_content = format!(
         "{}\nHookDir = {}\n",
-        content.replace(
+        bootstrap_content.replace(
             "Include = /etc/pacman.d/mirrorlist",
             &format!("Include = {}", stable_mirrorlist.display()),
         ),
@@ -157,10 +163,16 @@ fn configure_omarchy_repo(content: &str) -> String {
 /// Adds image-build pacman options inside `[options]`, rather than appending
 /// them after a repository section where pacman would reject them.
 fn add_omarchy_pacman_options(content: &str) -> String {
-    const OPTIONS: [&str; 2] = [
-        "NoExtract = usr/share/libalpm/hooks/*limine*",
-        "NoExtract = etc/pacman.d/hooks/*limine*",
-    ];
+    add_pacman_options(
+        content,
+        &[
+            "NoExtract = usr/share/libalpm/hooks/*limine*",
+            "NoExtract = etc/pacman.d/hooks/*limine*",
+        ],
+    )
+}
+
+fn add_pacman_options(content: &str, options: &[&str]) -> String {
     let mut lines = Vec::new();
     let mut in_options = false;
     let mut inserted = false;
@@ -169,7 +181,7 @@ fn add_omarchy_pacman_options(content: &str) -> String {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if in_options && !inserted {
-                lines.extend(OPTIONS);
+                lines.extend(options.iter().copied());
                 inserted = true;
             }
             in_options = trimmed == "[options]";
@@ -178,12 +190,43 @@ fn add_omarchy_pacman_options(content: &str) -> String {
     }
 
     if in_options && !inserted {
-        lines.extend(OPTIONS);
+        lines.extend(options.iter().copied());
     }
 
     let mut result = lines.join("\n");
     result.push('\n');
     result
+}
+
+fn run_pacstrap_with_retries(
+    pacstrap: &Tool,
+    pacman_conf: &Path,
+    mount_path: &Path,
+    use_host_cache: bool,
+    packages: &[String],
+    dryrun: bool,
+) -> anyhow::Result<()> {
+    let attempts = if dryrun { 1 } else { PACSTRAP_MAX_ATTEMPTS };
+
+    for attempt in 1..=attempts {
+        let mut command = pacstrap.execute();
+        command.arg("-C").arg(pacman_conf);
+        if use_host_cache {
+            command.arg("-c");
+        }
+        command.arg(mount_path).args(packages);
+
+        match command.run(dryrun) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < attempts => {
+                warn!("Pacstrap attempt {attempt}/{attempts} failed: {error:#}; retrying");
+                std::thread::sleep(std::time::Duration::from_secs(attempt as u64 * 2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("pacstrap always has at least one attempt")
 }
 
 /// Overrides host Limine hooks with equivalent no-op hooks in a later hook
@@ -934,20 +977,20 @@ fn bootstrap_system<'a>(
     };
 
     info!("Bootstrapping system");
-    let mut pacstrap = tools.pacstrap.execute();
-    pacstrap.arg("-C").arg(&pacman_conf_path);
-    // Do not reuse the host package cache for Omarchy. A host on a newer
-    // channel can have package archives that are not available from the
-    // image's repository snapshot.
-    if !is_omarchy {
-        pacstrap.arg("-c");
-    }
-    pacstrap
-        .arg(mount_point.path())
-        .args(packages) // The `packages` set now contains all conditional packages
-        .args(&command.extra_packages)
-        .run(command.dryrun)
-        .context("Pacstrap error")?;
+    // The package set now contains all conditional packages and command-line
+    // additions. A failed download can leave the other archives in the cache,
+    // so retrying the transaction avoids restarting the entire install.
+    packages.extend(command.extra_packages.iter().cloned());
+    let packages = packages.into_iter().collect::<Vec<_>>();
+    run_pacstrap_with_retries(
+        &tools.pacstrap,
+        &pacman_conf_path,
+        mount_point.path(),
+        !is_omarchy,
+        &packages,
+        command.dryrun,
+    )
+    .context("Pacstrap error")?;
 
     // For Omarchy, the first pacstrap installs the `omarchy` package which
     // ships the package manifests for the full desktop. The `standard` profile
@@ -970,15 +1013,16 @@ fn bootstrap_system<'a>(
                 "Installing {} packages from Omarchy manifests (standard profile)...",
                 manifest_packages.len()
             );
-            tools
-                .pacstrap
-                .execute()
-                .arg("-C")
-                .arg(&pacman_conf_path)
-                .arg(mount_point.path())
-                .args(manifest_packages)
-                .run(command.dryrun)
-                .context("Failed to install Omarchy manifest packages")?;
+            let manifest_packages = manifest_packages.into_iter().collect::<Vec<_>>();
+            run_pacstrap_with_retries(
+                &tools.pacstrap,
+                &pacman_conf_path,
+                mount_point.path(),
+                false,
+                &manifest_packages,
+                command.dryrun,
+            )
+            .context("Failed to install Omarchy manifest packages")?;
         }
     }
 
@@ -2421,5 +2465,17 @@ mod tests {
             "[options]\nArchitecture = auto\n\nNoExtract = usr/share/libalpm/hooks/*limine*\nNoExtract = etc/pacman.d/hooks/*limine*\n[core]"
         ));
         assert!(!configured.ends_with("NoExtract = etc/pacman.d/hooks/*limine*\n"));
+    }
+
+    #[test]
+    fn bootstrap_pacman_options_relax_slow_single_mirror_downloads() {
+        let configured = add_pacman_options(
+            "[options]\nParallelDownloads = 5\n\n[core]\nServer = https://archlinux.org/$arch\n",
+            &["DisableDownloadTimeout", "ParallelDownloads = 1"],
+        );
+
+        assert!(configured.contains(
+            "[options]\nParallelDownloads = 5\n\nDisableDownloadTimeout\nParallelDownloads = 1\n[core]"
+        ));
     }
 }
