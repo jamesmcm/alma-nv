@@ -144,6 +144,43 @@ sudo alma create --filesystem btrfs my-btrfs.img --image 8GiB
 - `--system`: `arch` (default) or `omarchy`.
 - `--filesystem`: `ext4` (default) or `btrfs`.
 
+#### Omarchy profiles
+
+ALMA installs Omarchy 4 (Quattro) from the Omarchy package repository using
+Omarchy's own `omarchy-apply-system` / `omarchy-provision-user` tooling, with a
+Limine + UKI bootloader and Quattro's Snapper setup.
+
+`--profile` selects how many packages are installed:
+
+- `portable` (default): a curated Omarchy core desktop (Hyprland, Quickshell
+  shell, Omarchy runtime/settings, terminal, login, networking, audio,
+  fonts/theme, browser, essential utilities) plus broad cross-machine hardware
+  support (Intel/AMD microcode, Mesa, Intel/AMD Vulkan, NVIDIA, firmware, SOF).
+  Aims for a ~6-8 GB installed base so a 16 GB USB is viable.
+- `standard`: the full official Omarchy package manifests (the complete
+  Quattro workstation, including office suites, Docker tooling, media and
+  development applications).
+
+```bash
+# Slim portable Omarchy (default)
+sudo alma create --system omarchy --profile portable my-omarchy.img --image 16GiB
+
+# Full official Omarchy package set
+sudo alma create --system omarchy --profile standard my-omarchy.img --image 32GiB
+```
+
+#### Deferred provisioning
+
+By default ALMA asks for the user/credentials up front and provisions the user
+during installation. With `--defer-provisioning`, ALMA produces a generic
+image with no user; on first boot Omarchy's genuine onboarding runs on the
+console to let you choose the keyboard, username, password, hostname and
+timezone.
+
+```bash
+sudo alma create --system omarchy --defer-provisioning my-omarchy.img --image 16GiB
+```
+
 ### Disk Encryption
 
 You can enable full disk encryption (LUKS) for the root partition with the `-e` flag:
@@ -293,6 +330,10 @@ OPTIONS:
         --dryrun
             Print commands instead of executing them
 
+        --defer-provisioning
+            Defer user provisioning to first boot (Omarchy only). Creates a generic image with no
+            user; Omarchy's owner provisioning runs at first boot.
+
     -e, --encrypted-root
             Encrypt the root partition (highly recommended for Omarchy)
 
@@ -326,6 +367,14 @@ OPTIONS:
 
         --presets <PRESETS_PATH>
             Paths to preset files/dirs (local, http(s) zip/tar.gz, or git repo)
+
+        --profile <profile>
+            Omarchy installation profile (only used with --system omarchy). portable installs the
+            Omarchy core desktop with broad hardware support; standard installs the full official
+            Omarchy package set
+
+            [default: portable]
+            [possible values: portable, standard]
 
         --root-partition <ROOT_PARTITION_PATH>
             Path to a partition to use as the target root partition - this will reformat the

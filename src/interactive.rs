@@ -108,7 +108,9 @@ impl UserSettings {
     }
 
     /// Generates a bash script to perform user setup based on the collected settings.
-    pub fn generate_setup_script(&self) -> anyhow::Result<String> {
+    /// When `create_user` is false (deferred provisioning) the script only sets
+    /// the hostname and timezone; the user is created at first boot by Omarchy.
+    pub fn generate_setup_script(&self, create_user: bool) -> anyhow::Result<String> {
         let mut script = String::new();
         script.push_str("set -eux\n");
         script.push_str(&format!("echo {} > /etc/hostname\n", self.hostname));
@@ -116,6 +118,11 @@ impl UserSettings {
             "ln -sf /usr/share/zoneinfo/{} /etc/localtime\n",
             self.timezone
         ));
+
+        if !create_user {
+            return Ok(script);
+        }
+
         script.push_str(&format!(
             "useradd -m -G wheel {} || echo \"User {} already exists\"\n",
             self.username, self.username

@@ -81,6 +81,30 @@ pub enum RootFilesystemType {
     Btrfs,
 }
 
+/// The Omarchy installation profile. `Portable` installs a curated Omarchy core
+/// desktop plus broad cross-machine hardware support; `Standard` installs the
+/// full official Omarchy package manifests.
+#[derive(ValueEnum, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OmarchyProfile {
+    #[default]
+    Portable,
+    Standard,
+}
+
+impl fmt::Display for OmarchyProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                OmarchyProfile::Portable => "portable",
+                OmarchyProfile::Standard => "standard",
+            }
+        )
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 pub struct CreateCommand {
     /// Path to a block device or a non-existing file if --image is specified
@@ -132,6 +156,22 @@ pub struct CreateCommand {
     /// Encrypt the root partition (highly recommended for Omarchy)
     #[clap(short = 'e', long = "encrypted-root")]
     pub encrypted_root: bool,
+
+    /// Omarchy installation profile (only used with --system omarchy).
+    /// `portable` installs the Omarchy core desktop with broad hardware support;
+    /// `standard` installs the full official Omarchy package set.
+    #[clap(long, value_enum, default_value_t = OmarchyProfile::Portable)]
+    pub profile: OmarchyProfile,
+
+    /// Defer user provisioning to first boot (Omarchy only). Creates a generic
+    /// image with no user; at first boot the genuine Omarchy onboarding runs.
+    #[clap(long = "defer-provisioning")]
+    pub defer_provisioning: bool,
+
+    /// Do not sanitize the installed system for portability; keep the build
+    /// host's hardware configuration (Omarchy only, portable profile).
+    #[clap(long = "keep-host-hardware")]
+    pub keep_host_hardware: bool,
 
     /// Paths to preset files/dirs (local, http(s) zip/tar.gz, or git repo)
     #[clap(long = "presets", value_name = "PRESETS_PATH", value_parser = parse_presets_path)]
@@ -223,6 +263,11 @@ pub struct Manifest {
     pub system_variant: SystemVariant,
     pub filesystem: RootFilesystemType,
     pub encrypted_root: bool,
+    pub profile: Option<OmarchyProfile>,
+    #[serde(default)]
+    pub defer_provisioning: bool,
+    #[serde(default)]
+    pub keep_host_hardware: bool,
     pub aur_helper: String,
     pub original_command: String,
     pub sources: Vec<Source>,
