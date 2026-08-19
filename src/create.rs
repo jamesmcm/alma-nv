@@ -68,31 +68,206 @@ fn read_omarchy_manifest(mount_path: &Path, manifest: &str) -> HashSet<String> {
     packages
 }
 
-/// Constructs a pacman.conf for the target that also includes the Omarchy
-/// package repository. The result is written into `omarchy_conf_dir` and the
-/// path to it is returned.
+/// The bootstrap config gets a temporary hook directory so host-side Limine
+/// deployment hooks cannot touch the loop-backed image. The target config
+/// keeps the repository and NoExtract settings, but not that build-only path.
 fn configure_omarchy_pacman_conf(
     base_conf: &Path,
     omarchy_conf_dir: &Path,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<(PathBuf, PathBuf)> {
     let content = fs::read_to_string(base_conf).context("Failed to read pacman.conf")?;
+    let content = configure_omarchy_repo(&content);
+    let stable_mirrorlist = omarchy_conf_dir.join("mirrorlist-stable");
+    fs::write(&stable_mirrorlist, constants::OMARCHY_STABLE_MIRRORLIST)
+        .context("Failed to write Omarchy stable mirrorlist")?;
 
-    let repo_section = format!(
-        "\n[{}]\nServer = {}/$arch\nSigLevel = Optional TrustAll\n",
-        constants::OMARCHY_DEFAULT_REPO_NAME,
+    // Limine hooks are not useful during an offline image build. In
+    // particular, a host hook can see the target ESP as /dev/loop0p1 and try
+    // to register it in host firmware. Keep such hooks out of the image too,
+    // so later pacman transactions do not repeat the same mistake.
+    let content = add_omarchy_pacman_options(&content);
+    let target_conf = omarchy_conf_dir.join("pacman-omarchy.conf");
+    fs::write(&target_conf, &content).context("Failed to write Omarchy pacman.conf")?;
+
+    let hook_dir = omarchy_conf_dir.join("bootstrap-hooks");
+    neutralize_limine_hooks(&hook_dir)?;
+    let bootstrap_conf = omarchy_conf_dir.join("pacman-omarchy-bootstrap.conf");
+    let bootstrap_content = format!(
+        "{}\nHookDir = {}\n",
+        content.replace(
+            "Include = /etc/pacman.d/mirrorlist",
+            &format!("Include = {}", stable_mirrorlist.display()),
+        ),
+        hook_dir.display()
+    );
+    fs::write(&bootstrap_conf, bootstrap_content)
+        .context("Failed to write Omarchy bootstrap pacman.conf")?;
+
+    Ok((bootstrap_conf, target_conf))
+}
+
+/// Replaces any host-defined Omarchy repository section. A host can be on a
+/// different channel or package snapshot (for example stable-mirror), and
+/// carrying that section into an image build can make pacman request package
+/// versions that the selected mirror does not serve.
+fn configure_omarchy_repo(content: &str) -> String {
+    let header = format!("[{}]", constants::OMARCHY_DEFAULT_REPO_NAME);
+    let server = format!(
+        "Server = {}/stable/$arch",
         constants::OMARCHY_DEFAULT_REPO_URL
     );
+    let canonical = [
+        header.as_str(),
+        server.as_str(),
+        "SigLevel = Optional TrustAll",
+    ];
+    let mut lines = Vec::new();
+    let mut in_omarchy = false;
+    let mut inserted = false;
 
-    // Avoid adding the repo twice if it is already configured.
-    let content = if content.contains(&format!("[{}]", constants::OMARCHY_DEFAULT_REPO_NAME)) {
-        content
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_omarchy = trimmed == header;
+            if in_omarchy {
+                if !inserted {
+                    lines.extend(canonical.iter().copied());
+                    inserted = true;
+                }
+                continue;
+            }
+        }
+        if !in_omarchy {
+            lines.push(line);
+        }
+    }
+
+    if !inserted {
+        if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+            lines.push("");
+        }
+        lines.extend(canonical.iter().copied());
+    }
+
+    let mut result = lines.join("\n");
+    result.push('\n');
+    result
+}
+
+/// Adds image-build pacman options inside `[options]`, rather than appending
+/// them after a repository section where pacman would reject them.
+fn add_omarchy_pacman_options(content: &str) -> String {
+    const OPTIONS: [&str; 2] = [
+        "NoExtract = usr/share/libalpm/hooks/*limine*",
+        "NoExtract = etc/pacman.d/hooks/*limine*",
+    ];
+    let mut lines = Vec::new();
+    let mut in_options = false;
+    let mut inserted = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_options && !inserted {
+                lines.extend(OPTIONS);
+                inserted = true;
+            }
+            in_options = trimmed == "[options]";
+        }
+        lines.push(line);
+    }
+
+    if in_options && !inserted {
+        lines.extend(OPTIONS);
+    }
+
+    let mut result = lines.join("\n");
+    result.push('\n');
+    result
+}
+
+/// Overrides host Limine hooks with equivalent no-op hooks in a later hook
+/// directory. Pacman always loads its system hook directory, so merely setting
+/// HookDir to an empty directory is not enough to suppress a host hook.
+fn neutralize_limine_hooks(hook_dir: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(hook_dir)?;
+
+    for source_dir in [
+        Path::new("/usr/share/libalpm/hooks"),
+        Path::new("/etc/pacman.d/hooks"),
+    ] {
+        let Ok(entries) = fs::read_dir(source_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let source = entry.path();
+            if source.extension().and_then(|ext| ext.to_str()) != Some("hook") {
+                continue;
+            }
+            let Ok(original) = fs::read_to_string(&source) else {
+                continue;
+            };
+            if !original.to_ascii_lowercase().contains("limine") {
+                continue;
+            }
+
+            let overridden = original
+                .lines()
+                .map(|line| {
+                    if line.trim_start().starts_with("Exec") {
+                        "Exec = /usr/bin/true".to_string()
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let filename = source
+                .file_name()
+                .ok_or_else(|| anyhow!("Invalid pacman hook path: {}", source.display()))?;
+            fs::write(hook_dir.join(filename), format!("{overridden}\n"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Installs the non-NVRAM Limine defaults before pacstrap. This prevents a
+/// package hook from trying to discover a physical disk while the ESP is
+/// backed by a loop partition.
+fn prepare_offline_limine(mount_path: &Path, dryrun: bool) -> anyhow::Result<()> {
+    let path = mount_path.join("etc/default/limine");
+    let content = "ESP_PATH=\"/boot\"\nENABLE_LIMINE_FALLBACK=yes\nSKIP_UEFI=yes\n";
+    if dryrun {
+        println!("write {}\n{content}", path.display());
     } else {
-        format!("{content}\n{repo_section}")
-    };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, content).context("Failed to prepare offline Limine defaults")?;
+    }
+    Ok(())
+}
 
-    let conf_path = omarchy_conf_dir.join("pacman-omarchy.conf");
-    fs::write(&conf_path, content).context("Failed to write Omarchy pacman.conf")?;
-    Ok(conf_path)
+/// Installs Omarchy's stable Arch mirrorlist into the target. Omarchy packages
+/// are built against this snapshot, not the moving mirrorlist of the build
+/// host.
+fn write_omarchy_mirrorlist(mount_path: &Path, dryrun: bool) -> anyhow::Result<()> {
+    let path = mount_path.join("etc/pacman.d/mirrorlist");
+    if dryrun {
+        println!(
+            "write {}\n{}",
+            path.display(),
+            constants::OMARCHY_STABLE_MIRRORLIST
+        );
+    } else {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, constants::OMARCHY_STABLE_MIRRORLIST)
+            .context("Failed to write Omarchy stable mirrorlist to target")?;
+    }
+    Ok(())
 }
 
 pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
@@ -665,6 +840,9 @@ fn bootstrap_system<'a>(
     )?;
 
     let is_omarchy = command.system == SystemVariant::Omarchy;
+    if is_omarchy {
+        prepare_offline_limine(mount_point.path(), command.dryrun)?;
+    }
 
     // The base package set differs for Omarchy: Quattro uses Limine rather than
     // GRUB, so we avoid pulling in the GRUB bootloader stack.
@@ -717,6 +895,12 @@ fn bootstrap_system<'a>(
                     .iter()
                     .map(|s| s.to_string()),
             );
+            info!("Adding portable Omarchy development tools...");
+            packages.extend(
+                constants::OMARCHY_PORTABLE_DEV_PACKAGES
+                    .iter()
+                    .map(|s| s.to_string()),
+            );
         }
     }
 
@@ -737,20 +921,28 @@ fn bootstrap_system<'a>(
     // For Omarchy we configure the Omarchy package repository in a dedicated
     // pacman.conf that is used for pacstrap (and copied into the image).
     let omarchy_conf_holder;
-    let pacman_conf_path: &Path = if is_omarchy {
+    let omarchy_target_conf;
+    let pacman_conf_path: PathBuf = if is_omarchy {
         omarchy_conf_holder = tempfile::tempdir().context("Error creating a temp dir")?;
-        &configure_omarchy_pacman_conf(&pacman_conf_path, omarchy_conf_holder.path())?
+        let (bootstrap_conf, target_conf) =
+            configure_omarchy_pacman_conf(&pacman_conf_path, omarchy_conf_holder.path())?;
+        omarchy_target_conf = target_conf;
+        bootstrap_conf
     } else {
-        &pacman_conf_path
+        omarchy_target_conf = pacman_conf_path.clone();
+        pacman_conf_path
     };
 
     info!("Bootstrapping system");
-    tools
-        .pacstrap
-        .execute()
-        .arg("-C")
-        .arg(pacman_conf_path)
-        .arg("-c")
+    let mut pacstrap = tools.pacstrap.execute();
+    pacstrap.arg("-C").arg(&pacman_conf_path);
+    // Do not reuse the host package cache for Omarchy. A host on a newer
+    // channel can have package archives that are not available from the
+    // image's repository snapshot.
+    if !is_omarchy {
+        pacstrap.arg("-c");
+    }
+    pacstrap
         .arg(mount_point.path())
         .args(packages) // The `packages` set now contains all conditional packages
         .args(&command.extra_packages)
@@ -782,8 +974,7 @@ fn bootstrap_system<'a>(
                 .pacstrap
                 .execute()
                 .arg("-C")
-                .arg(pacman_conf_path)
-                .arg("-c")
+                .arg(&pacman_conf_path)
                 .arg(mount_point.path())
                 .args(manifest_packages)
                 .run(command.dryrun)
@@ -792,8 +983,14 @@ fn bootstrap_system<'a>(
     }
 
     if !command.dryrun {
-        fs::copy(pacman_conf_path, mount_point.path().join("etc/pacman.conf"))
-            .context("Failed copying pacman.conf")?;
+        fs::copy(
+            &omarchy_target_conf,
+            mount_point.path().join("etc/pacman.conf"),
+        )
+        .context("Failed copying pacman.conf")?;
+    }
+    if is_omarchy {
+        write_omarchy_mirrorlist(mount_point.path(), command.dryrun)?;
     }
 
     let fstab = fix_fstab(
@@ -1016,6 +1213,7 @@ fn write_omarchy_storage_config(
     limine_content = limine_content.replace("@@CMDLINE@@", &cmdline);
     limine_content = replace_limine_option(&limine_content, "ESP_PATH", "\"/boot\"");
     limine_content = replace_limine_option(&limine_content, "ENABLE_LIMINE_FALLBACK", "yes");
+    limine_content = replace_limine_option(&limine_content, "SKIP_UEFI", "yes");
 
     if !dryrun {
         if let Some(parent) = default_limine.parent() {
@@ -1050,6 +1248,27 @@ fn replace_limine_option(content: &str, key: &str, value: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Reasserts the image-build Limine mode after Omarchy's system setup has run.
+fn enforce_offline_limine_settings(mount_path: &Path, dryrun: bool) -> anyhow::Result<()> {
+    let path = mount_path.join("etc/default/limine");
+    if dryrun {
+        println!(
+            "set ENABLE_LIMINE_FALLBACK=yes and SKIP_UEFI=yes in {}",
+            path.display()
+        );
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    let content = replace_limine_option(
+        &replace_limine_option(&content, "ENABLE_LIMINE_FALLBACK", "yes"),
+        "SKIP_UEFI",
+        "yes",
+    );
+    fs::write(path, content).context("Failed to enforce offline Limine settings")?;
+    Ok(())
 }
 
 /// Runs the root-owned Quattro system configuration inside the target.
@@ -1226,6 +1445,12 @@ fn finalize_omarchy_limine(tools: &Tools, mount_path: &Path, dryrun: bool) -> an
         .run(dryrun)
         .context("limine-update failed")?;
 
+    // limine-update generates the UKI and menu, but its automatic installer
+    // must not be responsible for the image's EFI deployment. The explicit
+    // copies below are independent of the loop-device name and also guarantee
+    // the removable-media fallback path exists.
+    install_omarchy_limine_efi(mount_path, dryrun)?;
+
     // Disable Btrfs qgroup accounting so snapshots / space reporting behave
     // like upstream expects.
     tools
@@ -1236,6 +1461,44 @@ fn finalize_omarchy_limine(tools: &Tools, mount_path: &Path, dryrun: bool) -> an
         .run(dryrun)
         .context("btrfs quota disable failed")?;
 
+    Ok(())
+}
+
+/// Copies Limine's packaged UEFI binary without inspecting the mounted ESP's
+/// backing device or writing an EFI NVRAM entry.
+fn install_omarchy_limine_efi(mount_path: &Path, dryrun: bool) -> anyhow::Result<()> {
+    let source = mount_path.join("usr/share/limine/BOOTX64.EFI");
+    let limine_path = mount_path.join("boot/EFI/limine/limine_x64.efi");
+    let fallback_path = mount_path.join("boot/EFI/BOOT/BOOTX64.EFI");
+
+    if dryrun {
+        println!(
+            "mkdir -p {}/boot/EFI/limine {}/boot/EFI/BOOT",
+            mount_path.display(),
+            mount_path.display()
+        );
+        println!("cp {} {}", source.display(), limine_path.display());
+        println!("cp {} {}", source.display(), fallback_path.display());
+        return Ok(());
+    }
+
+    if !source.exists() {
+        return Err(anyhow!(
+            "Installed Limine EFI binary is missing: {}",
+            source.display()
+        ));
+    }
+    for destination in [&limine_path, &fallback_path] {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&source, destination).with_context(|| {
+            format!(
+                "Failed to copy Limine EFI binary to {}",
+                destination.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -1565,6 +1828,8 @@ fn finalize_omarchy_install(
     if defer {
         stage_deferred_provisioning(mount_path, luks_passphrase, dryrun)?;
     }
+
+    enforce_offline_limine_settings(mount_path, dryrun)?;
 
     // Final Limine/UKI build (after omarchy-apply-system has run hardware
     // setup and written its dynamic boot drop-ins).
@@ -2124,5 +2389,37 @@ mod tests {
 
         // Removing a missing file is a no-op, not an error.
         remove_staged_file(&path, false).unwrap();
+    }
+
+    #[test]
+    fn configure_omarchy_repo_replaces_host_mirror() {
+        let config = "[core]\nServer = https://archlinux.org/$arch\n\n[omarchy]\nServer = https://stable-mirror.omarchy.org/$arch\n\n[extra]\n";
+        let configured = configure_omarchy_repo(config);
+
+        assert!(configured.contains("[omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch"));
+        assert!(!configured.contains("stable-mirror.omarchy.org"));
+        assert_eq!(configured.matches("[omarchy]").count(), 1);
+        assert!(configured.contains("[extra]"));
+    }
+
+    #[test]
+    fn configure_omarchy_repo_appends_when_missing() {
+        let configured = configure_omarchy_repo("[core]\nServer = https://archlinux.org/$arch\n");
+
+        assert!(configured.ends_with(
+            "\n[omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\nSigLevel = Optional TrustAll\n"
+        ));
+    }
+
+    #[test]
+    fn add_omarchy_pacman_options_keeps_noextract_in_options() {
+        let configured = add_omarchy_pacman_options(
+            "[options]\nArchitecture = auto\n\n[core]\nServer = https://archlinux.org/$arch\n",
+        );
+
+        assert!(configured.contains(
+            "[options]\nArchitecture = auto\n\nNoExtract = usr/share/libalpm/hooks/*limine*\nNoExtract = etc/pacman.d/hooks/*limine*\n[core]"
+        ));
+        assert!(!configured.ends_with("NoExtract = etc/pacman.d/hooks/*limine*\n"));
     }
 }

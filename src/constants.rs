@@ -40,6 +40,8 @@ pub const AUR_DEPENDENCIES: [&str; 1] = ["sudo"];
 // than cloning a git repo and running an installer script.
 pub const OMARCHY_DEFAULT_REPO_URL: &str = "https://pkgs.omarchy.org";
 pub const OMARCHY_DEFAULT_REPO_NAME: &str = "omarchy";
+pub const OMARCHY_STABLE_MIRRORLIST: &str =
+    "Server = https://stable-mirror.omarchy.org/$repo/os/$arch\n";
 
 // The default LUKS mapper name used by Omarchy's own installer. ALMA reuses
 // this name so that the boot configuration matches upstream expectations.
@@ -220,6 +222,12 @@ pub const OMARCHY_CORE_PACKAGES: [&str; 69] = [
     "ufw-docker",
     "plocate",
 ];
+
+// The portable profile still runs Omarchy's complete first-boot user setup.
+// Keep the development tools that setup and a normal Omarchy work environment
+// expect even though portable skips the full workstation manifest.
+pub const OMARCHY_PORTABLE_DEV_PACKAGES: [&str; 5] =
+    ["base-devel", "git", "github-cli", "lazygit", "mise"];
 
 pub const FONT_PACKAGES: &[(&str, &[&str])] = &[
     (

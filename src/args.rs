@@ -251,6 +251,9 @@ pub struct QemuCommand {
     /// Path to the ALMA system's block device or image file
     #[clap()]
     pub block_device: PathBuf,
+    /// Boot with legacy BIOS instead of the default UEFI firmware
+    #[clap(long = "bios")]
+    pub bios: bool,
     /// Arguments to pass to qemu
     #[clap()]
     pub args: Vec<String>,
