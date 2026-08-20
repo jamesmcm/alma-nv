@@ -41,7 +41,6 @@ pub struct Tools {
     pub mkext4: Option<Tool>,
     pub mkbtrfs: Option<Tool>,
     pub btrfs: Option<Tool>,
-    pub git: Tool,
     pub cryptsetup: Option<Tool>,
     pub blkid: Option<Tool>,
 }
@@ -90,9 +89,6 @@ impl Tools {
             } else {
                 None
             },
-            git: Tool::find("git", dryrun).map_err(|_| {
-                anyhow!("git is required for using ALMA. Please install the 'git' package.")
-            })?,
             cryptsetup: if encrypted {
                 Some(Tool::find("cryptsetup", dryrun).map_err(|_| {
                     anyhow!("cryptsetup is required for setting up encrypted filesystems. Please install the 'cryptsetup' package.")
@@ -100,13 +96,11 @@ impl Tools {
             } else {
                 None
             },
-            blkid: if encrypted {
-                Some(Tool::find("blkid", dryrun).map_err(|_| {
-                    anyhow!("blkid is required for setting up encrypted filesystems. Please install the 'util-linux' package.")
-                })?)
-            } else {
-                None
-            },
+            // blkid is always required: Omarchy needs it to build its storage
+            // and boot configuration even for unencrypted installs.
+            blkid: Some(Tool::find("blkid", dryrun).map_err(|_| {
+                anyhow!("blkid is required for setting up encrypted filesystems. Please install the 'util-linux' package.")
+            })?),
         })
     }
 }

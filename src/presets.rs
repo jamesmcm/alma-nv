@@ -112,15 +112,10 @@ impl PresetsPath {
                 let mut ssh_keys: Vec<DirEntry> =
                     std::fs::read_dir(Path::new(&format!("{}/.ssh/", env::var("HOME")?)))?
                         .filter_map(|f| {
-                            f.ok().and_then(|fi| {
-                                if fi.path().is_file()
+                            f.ok().filter(|fi| {
+                                fi.path().is_file()
                                     && fi.file_name().to_string_lossy().starts_with("id")
                                     && !fi.file_name().to_string_lossy().ends_with(".pub")
-                                {
-                                    Some(fi)
-                                } else {
-                                    None
-                                }
                             })
                         })
                         .collect();
@@ -207,7 +202,7 @@ impl std::str::FromStr for PresetsPath {
             } else if s.ends_with(".git") {
                 Ok(Self::GitHttp(Url::parse(s).map_err(|e| e.to_string())?))
             } else {
-                Err(format!("Could not parse URL: {}", &s))
+                Err(format!("Could not parse URL: {}", s))
             }
         } else if (s.starts_with("git@") || s.starts_with("ssh://")) && s.ends_with(".git") {
             Ok(Self::GitSSH(s.to_string()))
@@ -305,9 +300,8 @@ impl Preset {
                         // Convert directories to absolute paths
                         // If any shared directory is not a directory then throw an error
                         x.iter()
-                            .cloned()
                             .map(|y| {
-                                let full_path = path.parent().expect("Path has no parent").join(&y);
+                                let full_path = path.parent().expect("Path has no parent").join(y);
                                 if full_path.is_dir() {
                                     Ok(full_path)
                                 } else {

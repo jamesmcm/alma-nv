@@ -129,6 +129,7 @@ pub fn chroot(command: args::ChrootCommand) -> anyhow::Result<()> {
             cryptsetup.as_ref().unwrap(),
             &root_partition_base,
             "alma_root".into(),
+            None,
         )?)
     } else {
         None

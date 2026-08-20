@@ -17,7 +17,8 @@ RUN pacman -Syu --noconfirm && \
   dosfstools \
   util-linux \
   cryptsetup \
-  e2fsprogs && \
+  e2fsprogs \
+  libgit2 && \
   pacman -Scc --noconfirm
 
 RUN sed -i 's/#Color/Color/' /etc/pacman.conf

@@ -20,15 +20,27 @@ pub struct EncryptedDevice<'t, 'o> {
 }
 
 impl<'t, 'o> EncryptedDevice<'t, 'o> {
-    pub fn prepare(cryptsetup: &Tool, device: &dyn BlockDevice) -> anyhow::Result<()> {
+    /// Formats the device as a LUKS container. If `passphrase` is `Some`, it is
+    /// piped to cryptsetup via `--key-file -` (so ALMA can reuse the same
+    /// passphrase for later opening and first-boot keyfile staging). If `None`,
+    /// cryptsetup prompts interactively on the TTY.
+    pub fn prepare(
+        cryptsetup: &Tool,
+        device: &dyn BlockDevice,
+        passphrase: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
         debug!("Preparing encrypted device in {}", device.path().display());
-        cryptsetup
-            .execute()
-            .arg("luksFormat")
-            .arg("-q")
-            .arg(device.path())
-            .run(cryptsetup.dryrun)
-            .context("Error setting up an encrypted device")?;
+        let mut cmd = cryptsetup.execute();
+        cmd.arg("luksFormat").arg("-q").arg(device.path());
+
+        match passphrase {
+            Some(pass) => {
+                cmd.arg("--key-file").arg("-");
+                cmd.run_with_stdin(pass, cryptsetup.dryrun)
+            }
+            None => cmd.run(cryptsetup.dryrun),
+        }
+        .context("Error setting up an encrypted device")?;
 
         Ok(())
     }
@@ -37,19 +49,24 @@ impl<'t, 'o> EncryptedDevice<'t, 'o> {
         cryptsetup: &'t Tool,
         device: &'o dyn BlockDevice,
         name: String,
+        passphrase: Option<&[u8]>,
     ) -> anyhow::Result<EncryptedDevice<'t, 'o>> {
         debug!(
             "Opening encrypted device {} as {}",
             device.path().display(),
             name
         );
-        cryptsetup
-            .execute()
-            .arg("open")
-            .arg(device.path())
-            .arg(&name)
-            .run(cryptsetup.dryrun)
-            .context("Error opening the encrypted device")?;
+        let mut cmd = cryptsetup.execute();
+        cmd.arg("open").arg(device.path()).arg(&name);
+
+        match passphrase {
+            Some(pass) => {
+                cmd.arg("--key-file").arg("-");
+                cmd.run_with_stdin(pass, cryptsetup.dryrun)
+            }
+            None => cmd.run(cryptsetup.dryrun),
+        }
+        .context("Error opening the encrypted device")?;
 
         let path = PathBuf::from("/dev/mapper").join(&name);
         Ok(Self {
