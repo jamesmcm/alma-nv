@@ -89,6 +89,7 @@ impl<'a> StorageDevice<'a> {
         path
     }
 
+    // TODO: Can we do this better?
     fn is_removable_device(&self) -> anyhow::Result<bool> {
         let mut path = self.sys_path();
         path.push("removable");
@@ -99,6 +100,16 @@ impl<'a> StorageDevice<'a> {
         debug!("{path:?} -> {result}");
 
         Ok(result == "1\n")
+    }
+
+    // TODO: Can we just inline this where it is called? All this does is skip the Error case to
+    // false
+    /// Returns whether this target is backed by a removable physical device.
+    /// Loop devices and explicitly allowed fixed disks are intentionally not
+    /// considered removable: portable write/swap policies should follow the
+    /// actual target medium rather than a command-line profile.
+    pub fn is_removable(&self) -> bool {
+        self.is_removable_device().unwrap_or(false)
     }
 
     fn is_loop_device(&self) -> bool {

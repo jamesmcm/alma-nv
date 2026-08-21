@@ -144,31 +144,37 @@ sudo alma create --filesystem btrfs my-btrfs.img --image 8GiB
 - `--system`: `arch` (default) or `omarchy`.
 - `--filesystem`: `ext4` (default) or `btrfs`.
 
-#### Omarchy profiles
+#### Omarchy
 
 ALMA installs Omarchy 4 (Quattro) from the Omarchy package repository using
-Omarchy's own `omarchy-apply-system` / `omarchy-provision-user` tooling, with a
-Limine + UKI bootloader and Quattro's Snapper setup.
+Omarchy's own `omarchy-apply-system` / `omarchy-provision-user` tooling. Every
+Omarchy install tracks the complete upstream `omarchy-base.packages` manifest,
+then adds only the generic, non-specialist entries needed from
+`omarchy-other.packages` (for example the generic graphics/audio stack,
+`nautilus` integration, zram, and Snapper support). Omarchy's own package names
+remain authoritative when an optional package conflicts with them, including
+the packaged `yay` helper. Supplemental packages are installed after the base
+manifest through Omarchy's `omarchy-pkg-add` path, using the target's normal
+repository configuration.
+The Omarchy base transaction uses the stable Omarchy mirror snapshot for
+core/extra/multilib, and does not copy the host mirrorlist into the target.
 
-`--profile` selects how many packages are installed:
+When the target is a removable device, ALMA additionally enables the portable
+storage policy: zram and write-wear settings, `profile-sync-daemon`, a 25%-of-RAM
+`/var/tmp` tmpfs, Btrfs `commit=60`, host-hardware sanitization, and persistent
+Snapper disabling. A fixed disk keeps the normal local-install policy. Use
+`--keep-host-hardware` when a removable target is intentionally tied to the
+machine on which it is built.
 
-- `portable` (default): a curated Omarchy core desktop (Hyprland, Quickshell
-  shell, Omarchy runtime/settings, terminal, login, networking, audio,
-  fonts/theme, browser, essential utilities), development tools (including
-  `mise`), plus broad cross-machine hardware support (Intel/AMD microcode, Mesa,
-  Intel/AMD Vulkan, NVIDIA, firmware, SOF).
-  Aims for a ~6-8 GB installed base so a 16 GB USB is viable.
-- `standard`: the full official Omarchy package manifests (the complete
-  Quattro workstation, including office suites, Docker tooling, media and
-  development applications).
+Omarchy currently boots through Limine directly and its upstream installer
+requires Secure Boot to be disabled; the generic Arch/GRUB path validates the
+SBAT metadata required by modern shim releases.
 
-```bash
-# Slim portable Omarchy (default)
-sudo alma create --system omarchy --profile portable my-omarchy.img --image 16GiB
-
-# Full official Omarchy package set
-sudo alma create --system omarchy --profile standard my-omarchy.img --image 32GiB
-```
+The implementation keeps the shared storage/mount pipeline in `create.rs` and
+selects one `SystemInstaller` at the start of a run. Variant policy lives in
+`src/system/archlinux.rs` and `src/system/omarchy.rs`, so package manifests,
+repository setup, bootloader work, and finalization do not need to be threaded
+through the common pipeline as system conditionals.
 
 #### Deferred provisioning
 
@@ -365,14 +371,6 @@ OPTIONS:
 
         --presets <PRESETS_PATH>
             Paths to preset files/dirs (local, http(s) zip/tar.gz, or git repo)
-
-        --profile <profile>
-            Omarchy installation profile (only used with --system omarchy). portable installs the
-            Omarchy core desktop with broad hardware support; standard installs the full official
-            Omarchy package set
-
-            [default: portable]
-            [possible values: portable, standard]
 
         --root-partition <ROOT_PARTITION_PATH>
             Path to a partition to use as the target root partition - this will reformat the
