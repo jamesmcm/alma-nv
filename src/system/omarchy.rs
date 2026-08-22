@@ -60,6 +60,8 @@ const OMARCHY_PROVISIONING_MKINITCPIO_DROPIN: &str =
 const OMARCHY_PROVISION_OWNER_SERVICE: &str =
     "usr/share/omarchy/install/provisioning/omarchy-provision-owner.service";
 const OMARCHY_PROVISION_OWNER_UNIT: &str = "etc/systemd/system/omarchy-provision-owner.service";
+const OMARCHY_UNENCRYPTED_MKINITCPIO_DROPIN: &str =
+    "etc/mkinitcpio.conf.d/zz-alma-unencrypted.conf";
 
 const OMARCHY_PORTABLE_MKINITCPIO_DROPINS: &[&str] = &[
     "nvidia.conf",
@@ -80,7 +82,7 @@ const OMARCHY_PORTABLE_MODPROBE_FILES: &[&str] = &["nvidia.conf"];
 // portable, non-specialist additions selected from `omarchy-other.packages`.
 // Keep this list conservative: packages here are installed on every Omarchy
 // target, including removable media that must boot on unrelated hardware.
-const OMARCHY_GENERIC_PACKAGES: [&str; 36] = [
+const OMARCHY_GENERIC_PACKAGES: &[&str] = &[
     "linux",
     "linux-headers",
     "linux-firmware",
@@ -99,6 +101,9 @@ const OMARCHY_GENERIC_PACKAGES: [&str; 36] = [
     "sof-firmware",
     "pipewire",
     "pipewire-alsa",
+    // Also pinned explicitly in the bootstrap transaction (see
+    // `bootstrap_packages`); keep both in sync so the `jack` provider never
+    // resolves to jack2, whichever transaction wins the race.
     "pipewire-jack",
     "pipewire-pulse",
     "gst-plugin-pipewire",
@@ -116,7 +121,6 @@ const OMARCHY_GENERIC_PACKAGES: [&str; 36] = [
     "egl-wayland",
     "gtk4-layer-shell",
     "inotify-tools",
-    "rsync",
 ];
 // Broad Arch packages remain eligible even if a future Omarchy manifest moves
 // them out of `omarchy-other.packages`.
@@ -178,6 +182,28 @@ rm -f /etc/snapper/configs/root\n\
 if command -v btrfs >/dev/null 2>&1 && [ -d /.snapshots ]; then\n\
     btrfs subvolume delete /.snapshots >/dev/null 2>&1 || true\n\
 fi\n";
+
+/// Virtual dependencies inside `omarchy-base.packages` that no other package
+/// names by its concrete provider. They must be added as explicit targets of
+/// the manifest transaction, or pacman raises an interactive provider prompt
+/// before its confirmation.
+const OMARCHY_MANIFEST_PROVIDER_PINS: &[&str] = &[
+    // kdenlive/omacut/qt6-speech pull in `qt6-multimedia`, which depends on
+    // the virtual `qt6-multimedia-backend` (ffmpeg vs gstreamer backends).
+    "qt6-multimedia-ffmpeg",
+];
+
+fn ensure_manifest_provider_pins(manifest_packages: &mut Vec<String>) {
+    for pin in OMARCHY_MANIFEST_PROVIDER_PINS {
+        if !manifest_packages.iter().any(|package| package == *pin) {
+            info!(
+                "Adding explicit '{}' selection to the Omarchy manifest transaction",
+                pin
+            );
+            manifest_packages.push((*pin).to_string());
+        }
+    }
+}
 
 /// Reads a newline-separated package manifest shipped inside the installed
 /// `omarchy` package. Returns an empty set if the manifest is missing (e.g. in
@@ -298,30 +324,30 @@ pub(crate) fn configure_pacman_conf(
     fs::write(&stable_mirrorlist, OMARCHY_STABLE_MIRRORLIST)
         .context("Failed to write Omarchy stable mirrorlist")?;
 
-    let content = add_pacman_options(
-        &content,
-        &[
-            "NoExtract = usr/share/libalpm/hooks/*limine*",
-            "NoExtract = etc/pacman.d/hooks/*limine*",
-        ],
-    );
     let target_conf = omarchy_conf_dir.join("pacman-omarchy.conf");
     fs::write(&target_conf, &content).context("Failed to write Omarchy pacman.conf")?;
 
+    // Keep the target's Limine hooks installed so future package
+    // transactions can rebuild UKIs and deploy the fallback EFI binary. The
+    // isolated HookDir below prevents host hooks from running while pacstrap
+    // populates the loop-backed target; in-target transactions use the normal
+    // hook directories after the target pacman.conf is installed.
+    let bootstrap_content = content;
     let hook_dir = omarchy_conf_dir.join("bootstrap-hooks");
     neutralize_limine_hooks(&hook_dir)?;
     let bootstrap_conf = omarchy_conf_dir.join("pacman-omarchy-bootstrap.conf");
     let bootstrap_content = add_pacman_options(
-        &content,
+        &bootstrap_content,
         &["DisableDownloadTimeout", "ParallelDownloads = 1"],
     );
-    let bootstrap_content = format!(
-        "{}\nHookDir = {}\n",
-        bootstrap_content.replace(
-            "Include = /etc/pacman.d/mirrorlist",
-            &format!("Include = {}", stable_mirrorlist.display()),
-        ),
-        hook_dir.display()
+    let bootstrap_content = replace_pacman_option(
+        &bootstrap_content,
+        "HookDir",
+        &format!("HookDir = {}", hook_dir.display()),
+    );
+    let bootstrap_content = bootstrap_content.replace(
+        "Include = /etc/pacman.d/mirrorlist",
+        &format!("Include = {}", stable_mirrorlist.display()),
     );
     fs::write(&bootstrap_conf, bootstrap_content)
         .context("Failed to write Omarchy bootstrap pacman.conf")?;
@@ -443,6 +469,50 @@ fn add_pacman_options(content: &str, options: &[&str]) -> String {
     result
 }
 
+fn replace_pacman_option(content: &str, key: &str, replacement: &str) -> String {
+    let mut lines = Vec::new();
+    let mut in_options = false;
+    let mut replaced = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_options = trimmed == "[options]";
+        }
+        if in_options
+            && trimmed.starts_with(key)
+            && trimmed[key.len()..].trim_start().starts_with('=')
+        {
+            if !replaced {
+                lines.push(replacement.to_string());
+                replaced = true;
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+
+    if replaced {
+        return format!("{}\n", lines.join("\n"));
+    }
+
+    add_pacman_options(content, &[replacement])
+}
+
+/// Writes `content` to `mount_path`/`relative`, creating parent directories,
+/// or prints the equivalent action in dry-run mode.
+fn write_target_file(mount_path: &Path, relative: &str, content: &str, dryrun: bool) -> Result<()> {
+    let path = mount_path.join(relative);
+    if dryrun {
+        println!("write {}\n{content}", path.display());
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
+}
+
 fn neutralize_limine_hooks(hook_dir: &Path) -> Result<()> {
     fs::create_dir_all(hook_dir)?;
     for source_dir in [
@@ -484,31 +554,21 @@ fn neutralize_limine_hooks(hook_dir: &Path) -> Result<()> {
 }
 
 pub(crate) fn prepare_offline_limine(mount_path: &Path, dryrun: bool) -> Result<()> {
-    let path = mount_path.join("etc/default/limine");
-    let content = "ESP_PATH=\"/boot\"\nENABLE_LIMINE_FALLBACK=yes\nSKIP_UEFI=yes\n";
-    if dryrun {
-        println!("write {}\n{content}", path.display());
-    } else {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, content).context("Failed to prepare offline Limine defaults")?;
-    }
-    Ok(())
+    write_target_file(
+        mount_path,
+        "etc/default/limine",
+        "ESP_PATH=\"/boot\"\nENABLE_LIMINE_FALLBACK=yes\nSKIP_UEFI=yes\n",
+        dryrun,
+    )
 }
 
 pub(crate) fn write_mirrorlist(mount_path: &Path, dryrun: bool) -> Result<()> {
-    let path = mount_path.join("etc/pacman.d/mirrorlist");
-    if dryrun {
-        println!("write {}\n{}", path.display(), OMARCHY_STABLE_MIRRORLIST);
-    } else {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, OMARCHY_STABLE_MIRRORLIST)
-            .context("Failed to write Omarchy stable mirrorlist to target")?;
-    }
-    Ok(())
+    write_target_file(
+        mount_path,
+        "etc/pacman.d/mirrorlist",
+        OMARCHY_STABLE_MIRRORLIST,
+        dryrun,
+    )
 }
 
 struct OmarchyStorage {
@@ -725,6 +785,34 @@ fn apply_system(
         .run(dryrun)
         .context("omarchy-apply-system failed")?;
     Ok(())
+}
+
+fn configure_unencrypted_mkinitcpio(
+    mount_path: &Path,
+    encrypted: bool,
+    dryrun: bool,
+) -> Result<()> {
+    if encrypted {
+        return Ok(());
+    }
+
+    // Runs after sanitize_portable_hardware so the final initramfs rebuild
+    // (driven by finalize_limine's limine-update) reflects both the stripped
+    // `encrypt` hook and the sanitized drop-ins.
+    let content = "# ALMA: this target has an unencrypted root. Omarchy's stock encrypt hook\n\
+# assumes root is a LUKS device and otherwise attempts a pointless mapping.\n\
+_alma_hooks=()\n\
+for _alma_hook in \"${HOOKS[@]}\"; do\n\
+    [[ $_alma_hook == encrypt ]] || _alma_hooks+=(\"$_alma_hook\")\n\
+done\n\
+HOOKS=(\"${_alma_hooks[@]}\")\n\
+unset _alma_hooks _alma_hook\n";
+    write_target_file(
+        mount_path,
+        OMARCHY_UNENCRYPTED_MKINITCPIO_DROPIN,
+        content,
+        dryrun,
+    )
 }
 
 fn remove_staged_file(path: &Path, dryrun: bool) -> Result<()> {
@@ -1206,13 +1294,9 @@ fn finalize_install(context: &FinalizeContext<'_>) -> Result<()> {
             "An encrypted deferred-provisioning install requires a captured LUKS passphrase to stage the first-boot auto-unlock key."
         ));
     }
-    tools
-        .arch_chroot
-        .execute()
-        .arg(mount_path)
-        .args(["systemctl", "enable", "NetworkManager"])
-        .run(dryrun)
-        .context("Failed to enable NetworkManager")?;
+    // Service enablement (including NetworkManager) is owned by
+    // omarchy-apply-system, which runs Omarchy's own service setup below;
+    // ALMA only adds its volatile-journal policy on top.
     if !dryrun {
         fs::write(
             mount_path.join("etc/systemd/journald.conf"),
@@ -1233,12 +1317,13 @@ fn finalize_install(context: &FinalizeContext<'_>) -> Result<()> {
     if context.portable_target {
         // Omarchy owns the zram-generator and sysctl defaults. ALMA adds only
         // the generic user-runtime/PSD policy and snapshot policy here.
-        create::configure_portable_runtime(tools, mount_path, context.username, true, dryrun)?;
+        create::configure_portable_user_runtime(tools, mount_path, context.username, dryrun)?;
         configure_portable_snapshots(tools, mount_path, dryrun)?;
     }
     if context.portable_target && !command.keep_host_hardware {
         sanitize_portable_hardware(tools, mount_path, dryrun)?;
     }
+    configure_unencrypted_mkinitcpio(mount_path, context.encrypted_root, dryrun)?;
     if defer {
         stage_deferred_provisioning(mount_path, context.luks_passphrase, dryrun)?;
     }
@@ -1389,6 +1474,35 @@ impl SystemInstaller for Omarchy {
             "base-devel",
             "limine",
             "btrfs-progs",
+            // `omarchy` depends on the virtual `quickshell` name, while the
+            // authoritative Quattro manifest selects Omarchy's
+            // `quickshell-git` provider. Make that provider explicit in the
+            // first transaction so pacman cannot install Arch's conflicting
+            // `quickshell` package before the manifest is applied.
+            "quickshell-git",
+            // The Omarchy other-manifest selects PipeWire's JACK provider;
+            // make it explicit so dependencies on the virtual `jack` name do
+            // not select the conflicting `jack2` provider first.
+            "pipewire-jack",
+            // The generic kernel depends on the virtual `initramfs` name,
+            // which pacman otherwise resolves through an interactive prompt
+            // listing booster/dracut/mkinitcpio. Pin Omarchy's actual
+            // initramfs provider (limine-mkinitcpio-hook requires it anyway)
+            // so the bootstrap transaction never stops on that prompt.
+            "mkinitcpio",
+            // The omarchy meta package pulls in sddm, whose dependency on
+            // the virtual `ttf-font` name would otherwise raise an eleven-
+            // choice interactive prompt defaulting to gnu-free-fonts instead
+            // of Omarchy's own font selection. Pin the Noto provider that
+            // upstream's base manifest installs anyway; do not pin a second
+            // ttf-font provider alongside it.
+            "noto-fonts",
+            // iproute2 depends on the versioned soname `libxtables.so=12-64`,
+            // provided by both `iptables` (nft backend) and `iptables-legacy`
+            // in the snapshot repositories. Pin Arch's nft backend so neither
+            // this transaction nor the later docker/ufw manifest install ever
+            // asks which variant to install.
+            "iptables",
         ]
         .into_iter()
         .map(String::from)
@@ -1434,11 +1548,11 @@ impl SystemInstaller for Omarchy {
         let manifest_packages = base_manifest.clone();
         let mut additional_packages = HashSet::new();
         for package in OMARCHY_GENERIC_PACKAGES {
-            if base_manifest.contains(package) {
+            if base_manifest.contains(*package) {
                 continue;
             }
-            if other_manifest.contains(package)
-                || OMARCHY_GENERIC_ALWAYS_PACKAGES.contains(&package)
+            if other_manifest.contains(*package)
+                || OMARCHY_GENERIC_ALWAYS_PACKAGES.contains(package)
             {
                 additional_packages.insert((*package).to_string());
             } else {
@@ -1451,22 +1565,21 @@ impl SystemInstaller for Omarchy {
 
         let mut requested_packages = context.presets.packages.clone();
         requested_packages.extend(context.command.extra_packages.iter().cloned());
-        additional_packages.extend(prioritize_packages(requested_packages, &base_manifest));
+        additional_packages.extend(requested_packages);
 
         if !manifest_packages.is_empty() {
             info!(
                 "Installing {} packages from the complete Omarchy base manifest...",
                 manifest_packages.len()
             );
-            let manifest_packages = manifest_packages.into_iter().collect::<Vec<_>>();
+            let mut manifest_packages = manifest_packages.into_iter().collect::<Vec<_>>();
+            ensure_manifest_provider_pins(&mut manifest_packages);
             create::run_pacstrap_with_retries(
                 &context.tools.pacstrap,
-                &config.pacman_conf,
+                config,
                 context.mount_path,
-                false,
                 &manifest_packages,
                 context.command.dryrun,
-                false,
             )
             .context("Failed to install Omarchy manifest packages")?;
         }
@@ -1476,6 +1589,8 @@ impl SystemInstaller for Omarchy {
         }
         let mut additional_packages = additional_packages.into_iter().collect::<Vec<_>>();
         additional_packages.sort_unstable();
+        // Single conflict-resolution pass over the merged supplemental set
+        // (generic additions + presets + extra packages).
         let additional_packages = prioritize_packages(additional_packages, &base_manifest);
 
         if !context.command.dryrun {
@@ -1522,6 +1637,13 @@ impl SystemInstaller for Omarchy {
             origin: OMARCHY_DEFAULT_REPO_URL.to_string(),
             baked_path: std::path::PathBuf::from("/usr/share/omarchy"),
         });
+    }
+
+    fn provides_own_fstab(&self) -> bool {
+        // write_storage_config mirrors Quattro's pre-mounted fstab layout
+        // (including the portable commit=60/tmpfs policy), so genfstab output
+        // would only be overwritten.
+        true
     }
 }
 
@@ -1602,6 +1724,31 @@ mod tests {
     }
 
     #[test]
+    fn configure_pacman_conf_keeps_limine_hooks_installable() {
+        let base_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        let base_conf = base_dir.path().join("pacman.conf");
+        fs::write(
+            &base_conf,
+            "[options]\nParallelDownloads = 5\n\n[core]\nServer = https://archlinux.org/$arch\n",
+        )
+        .unwrap();
+
+        let (bootstrap_conf, target_conf) =
+            configure_pacman_conf(&base_conf, config_dir.path()).unwrap();
+        let bootstrap = fs::read_to_string(bootstrap_conf).unwrap();
+        let target = fs::read_to_string(target_conf).unwrap();
+
+        assert!(!bootstrap.contains("NoExtract = usr/share/libalpm/hooks/*limine*"));
+        assert!(!bootstrap.contains("NoExtract = etc/pacman.d/hooks/*limine*"));
+        assert!(bootstrap.contains(&format!(
+            "HookDir = {}",
+            config_dir.path().join("bootstrap-hooks").display()
+        )));
+        assert!(!target.contains("NoExtract ="));
+    }
+
+    #[test]
     fn configure_official_repos_forces_stable_mirror() {
         let configured = configure_official_repos(
             "[options]\n\n[core]\nServer = https://archlinux.org/$arch\n\n[core-testing]\nServer = https://testing.archlinux.org/$arch\n\n[extra]\nInclude = /etc/pacman.d/mirrorlist\n\n[custom]\nServer = https://custom.example/$arch\n",
@@ -1618,13 +1765,10 @@ mod tests {
     fn add_pacman_options_keeps_options_in_options_section() {
         let configured = add_pacman_options(
             "[options]\nArchitecture = auto\n\n[core]\nServer = https://archlinux.org/$arch\n",
-            &[
-                "NoExtract = usr/share/libalpm/hooks/*limine*",
-                "NoExtract = etc/pacman.d/hooks/*limine*",
-            ],
+            &["DisableDownloadTimeout", "ParallelDownloads = 1"],
         );
         assert!(configured.contains(
-            "[options]\nArchitecture = auto\n\nNoExtract = usr/share/libalpm/hooks/*limine*\nNoExtract = etc/pacman.d/hooks/*limine*\n[core]"
+            "[options]\nArchitecture = auto\n\nDisableDownloadTimeout\nParallelDownloads = 1\n[core]"
         ));
     }
 
@@ -1637,6 +1781,59 @@ mod tests {
         assert!(configured.contains(
             "[options]\nParallelDownloads = 5\n\nDisableDownloadTimeout\nParallelDownloads = 1\n[core]"
         ));
+    }
+
+    #[test]
+    fn replace_pacman_option_replaces_existing_key_in_options() {
+        let configured = replace_pacman_option(
+            "[options]\nHookDir = /etc/pacman.d/hooks\nArchitecture = auto\n\n[core]\nServer = https://archlinux.org/$arch\n",
+            "HookDir",
+            "HookDir = /tmp/bootstrap-hooks",
+        );
+        assert!(
+            configured.contains(
+                "[options]\nHookDir = /tmp/bootstrap-hooks\nArchitecture = auto\n\n[core]"
+            )
+        );
+        assert_eq!(configured.matches("HookDir").count(), 1);
+    }
+
+    #[test]
+    fn replace_pacman_option_collapses_duplicate_keys() {
+        let configured = replace_pacman_option(
+            "[options]\nHookDir = /a\nHookDir = /b\n\n[core]\nServer = https://archlinux.org/$arch\n",
+            "HookDir",
+            "HookDir = /tmp/bootstrap-hooks",
+        );
+        assert!(configured.contains("HookDir = /tmp/bootstrap-hooks"));
+        assert_eq!(configured.matches("HookDir").count(), 1);
+    }
+
+    #[test]
+    fn replace_pacman_option_appends_when_missing() {
+        let configured = replace_pacman_option(
+            "[options]\nArchitecture = auto\n\n[core]\nServer = https://archlinux.org/$arch\n",
+            "HookDir",
+            "HookDir = /tmp/bootstrap-hooks",
+        );
+        assert!(
+            configured.contains(
+                "[options]\nArchitecture = auto\n\nHookDir = /tmp/bootstrap-hooks\n[core]"
+            )
+        );
+    }
+
+    #[test]
+    fn replace_pacman_option_does_not_match_prefix_keys() {
+        let configured = replace_pacman_option(
+            "[options]\nHookDirsExtra = /x\n\n[core]\nServer = https://archlinux.org/$arch\n",
+            "HookDir",
+            "HookDir = /tmp/bootstrap-hooks",
+        );
+        assert!(configured.contains("HookDirsExtra = /x"));
+        assert!(
+            configured.contains("[options]\nHookDirsExtra = /x\n\nHookDir = /tmp/bootstrap-hooks")
+        );
     }
 
     #[test]
@@ -1676,5 +1873,34 @@ mod tests {
                 String::from("pipewire-jack"),
             ]
         );
+    }
+
+    #[test]
+    fn manifest_provider_pins_are_appended_exactly_once() {
+        let mut packages = vec![String::from("kdenlive"), String::from("qt6-multimedia")];
+        ensure_manifest_provider_pins(&mut packages);
+        assert_eq!(
+            packages
+                .iter()
+                .filter(|package| package.as_str() == "qt6-multimedia-ffmpeg")
+                .count(),
+            1
+        );
+
+        ensure_manifest_provider_pins(&mut packages);
+        assert_eq!(
+            packages
+                .iter()
+                .filter(|package| package.as_str() == "qt6-multimedia-ffmpeg")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn manifest_provider_pins_respect_upstream_selection() {
+        let mut packages = vec![String::from("kdenlive"), String::from("qt6-multimedia-ffmpeg")];
+        ensure_manifest_provider_pins(&mut packages);
+        assert_eq!(packages.len(), 2);
     }
 }

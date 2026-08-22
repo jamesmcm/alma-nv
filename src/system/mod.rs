@@ -48,6 +48,14 @@ pub trait SystemInstaller: Sync {
     fn apply_customizations(&self, context: &CustomizationContext<'_>) -> Result<()>;
     fn finalize(&self, context: &FinalizeContext<'_>) -> Result<()>;
     fn add_manifest_sources(&self, sources: &mut Vec<Source>);
+
+    /// Whether the variant writes its own authoritative `/etc/fstab` during
+    /// `finalize` (e.g. Omarchy mirrors Quattro's pre-mounted layout exactly).
+    /// When true, the shared pipeline skips genfstab entirely instead of
+    /// producing an fstab that would be overwritten.
+    fn provides_own_fstab(&self) -> bool {
+        false
+    }
 }
 
 /// Selects the one system implementation used for the whole create run.
@@ -70,6 +78,10 @@ pub struct BootstrapContext<'a> {
 /// Pacman configuration selected for the bootstrap transaction.
 pub struct BootstrapConfig {
     pub pacman_conf: PathBuf,
+    /// The pacman.conf to leave inside the installed system. Each variant
+    /// owns copying or generating this config during `complete_bootstrap`;
+    /// generic Arch preserves the selected config, while Omarchy installs its
+    /// generated target config before in-target transactions.
     pub target_pacman_conf: PathBuf,
     pub use_host_cache: bool,
     pub use_host_mirrorlist: bool,

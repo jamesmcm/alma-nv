@@ -146,9 +146,16 @@ impl SystemInstaller for ArchLinux {
 
     fn complete_bootstrap(
         &self,
-        _context: &BootstrapContext<'_>,
-        _config: &BootstrapConfig,
+        context: &BootstrapContext<'_>,
+        config: &BootstrapConfig,
     ) -> Result<()> {
+        if !context.command.dryrun {
+            fs::copy(
+                &config.target_pacman_conf,
+                context.mount_path.join("etc/pacman.conf"),
+            )
+            .context("Failed copying pacman.conf")?;
+        }
         Ok(())
     }
 
@@ -198,11 +205,11 @@ fn finalize_installation(context: &FinalizeContext<'_>) -> Result<()> {
     }
 
     if context.portable_target {
-        create::configure_portable_runtime(
+        create::configure_portable_zram_policy(mount_path, command.dryrun)?;
+        create::configure_portable_user_runtime(
             tools,
             mount_path,
             context.username,
-            false,
             command.dryrun,
         )?;
     }
@@ -290,20 +297,18 @@ fn setup_bootloader(
 
     let bootloader = mount_point.path().join("boot/EFI/BOOT/BOOTX64.efi");
     if !dryrun {
-        verify_sbat_section(arch_chroot, mount_point.path(), &bootloader, false)
+        verify_sbat_section(arch_chroot, mount_point.path(), &bootloader)
             .context("GRUB EFI binary is missing the SBAT section required by shim")?;
         verify_sbat_section(
             arch_chroot,
             mount_point.path(),
             &mount_point.path().join("usr/share/shim-signed/shimx64.efi"),
-            false,
         )
         .context("shim-signed EFI binary is missing the required SBAT section")?;
         verify_sbat_section(
             arch_chroot,
             mount_point.path(),
             &mount_point.path().join("usr/share/shim-signed/mmx64.efi"),
-            false,
         )
         .context("shim-signed MokManager binary is missing the required SBAT section")?;
 
@@ -326,12 +331,7 @@ fn setup_bootloader(
     Ok(())
 }
 
-fn verify_sbat_section(
-    arch_chroot: &Tool,
-    mount_path: &Path,
-    path: &Path,
-    dryrun: bool,
-) -> Result<()> {
+fn verify_sbat_section(arch_chroot: &Tool, mount_path: &Path, path: &Path) -> Result<()> {
     let target_path = path
         .strip_prefix(mount_path)
         .map(|relative| Path::new("/").join(relative))
@@ -342,7 +342,7 @@ fn verify_sbat_section(
         .arg("objdump")
         .args(["-j", ".sbat", "-s"])
         .arg(&target_path)
-        .run_text_output(dryrun)
+        .run_text_output(false)
         .with_context(|| format!("{} has no valid .sbat section", path.display()))?;
     Ok(())
 }

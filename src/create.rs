@@ -64,22 +64,20 @@ fn fix_fstab(fstab: &str, portable_target: bool) -> String {
 
 pub(crate) fn run_pacstrap_with_retries(
     pacstrap: &Tool,
-    pacman_conf: &Path,
+    config: &crate::system::BootstrapConfig,
     mount_path: &Path,
-    use_host_cache: bool,
     packages: &[String],
     dryrun: bool,
-    use_host_mirrorlist: bool,
 ) -> anyhow::Result<()> {
     let attempts = if dryrun { 1 } else { PACSTRAP_MAX_ATTEMPTS };
 
     for attempt in 1..=attempts {
         let mut command = pacstrap.execute();
-        command.arg("-C").arg(pacman_conf);
-        if use_host_cache {
+        command.arg("-C").arg(&config.pacman_conf);
+        if config.use_host_cache {
             command.arg("-c");
         }
-        if !use_host_mirrorlist {
+        if !config.use_host_mirrorlist {
             command.arg("-M");
         }
         command.arg(mount_path).args(packages);
@@ -157,7 +155,9 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
         command.allow_non_removable,
         command.dryrun,
     )?;
-    let portable_target = storage_device.is_removable();
+    // A sysfs read failure conservatively keeps the target on local-install
+    // storage policies rather than enabling portable write/swap behavior.
+    let portable_target = storage_device.is_removable_device().unwrap_or(false);
     if portable_target {
         info!(
             "Target {} is removable; enabling portable swap and write-wear policies",
@@ -230,17 +230,22 @@ pub fn create(mut command: CreateCommand) -> anyhow::Result<()> {
     let root_filesystem = Filesystem::from_partition(root_block_device, root_fs_type);
 
     // 6. Bootstrap system
-    // The `bootstrap_system` function now implicitly uses the new smart `mount` tool
-    let bootstrap_request = BootstrapRequest {
+    let mount_point = tempfile::tempdir().context("Error creating a temporary directory")?;
+    let bootstrap_context = BootstrapContext {
         command: &command,
         tools: &tools,
-        boot_filesystem: &boot_filesystem,
-        root_filesystem: &root_filesystem,
+        mount_path: mount_point.path(),
         presets: &presets,
         user_settings: user_settings.as_ref(),
         portable_target,
     };
-    let (mount_point, mount_stack) = bootstrap_system(&bootstrap_request, system)?;
+    let mount_stack = bootstrap_system(
+        &bootstrap_context,
+        &boot_filesystem,
+        &root_filesystem,
+        &mount_point,
+        system,
+    )?;
 
     // 7. Copy baked sources into the image
     bake_sources_into_image(mount_point.path(), &presets_paths, &command)?;
@@ -517,46 +522,21 @@ fn repartition_disk<'a>(
     })
 }
 
-struct BootstrapRequest<'a, 'b, 'c> {
-    command: &'a CreateCommand,
-    tools: &'a Tools,
+fn bootstrap_system<'a, 'b>(
+    context: &'a BootstrapContext<'a>,
     boot_filesystem: &'a Option<Filesystem<'b>>,
-    root_filesystem: &'a Filesystem<'c>,
-    presets: &'a PresetsCollection,
-    user_settings: Option<&'a UserSettings>,
-    portable_target: bool,
-}
-
-fn bootstrap_system<'a, 'b, 'c>(
-    request: &'a BootstrapRequest<'a, 'b, 'c>,
+    root_filesystem: &'a Filesystem<'b>,
+    mount_point: &'a tempfile::TempDir,
     system: &dyn SystemInstaller,
-) -> anyhow::Result<(tempfile::TempDir, MountStack<'a>)> {
-    let command = request.command;
-    let tools = request.tools;
-    let boot_filesystem = request.boot_filesystem;
-    let root_filesystem = request.root_filesystem;
-    let presets = request.presets;
-    let user_settings = request.user_settings;
-    let portable_target = request.portable_target;
-    let mount_point = tempfile::tempdir().context("Error creating a temporary directory")?;
-    let mount_stack = mount(
-        mount_point.path(),
-        boot_filesystem,
-        root_filesystem,
-        command.dryrun,
-    )?;
+) -> anyhow::Result<MountStack<'a>> {
+    let command = context.command;
+    let tools = context.tools;
+    let mount_path = mount_point.path();
+    let mount_stack = mount(mount_path, boot_filesystem, root_filesystem, command.dryrun)?;
 
-    system.prepare_bootstrap(mount_point.path(), command.dryrun)?;
+    system.prepare_bootstrap(mount_path, command.dryrun)?;
 
-    let context = BootstrapContext {
-        command,
-        tools,
-        mount_path: mount_point.path(),
-        presets,
-        user_settings,
-        portable_target,
-    };
-    let mut packages = system.bootstrap_packages(&context);
+    let mut packages = system.bootstrap_packages(context);
     // `sudo` is the only common bootstrap dependency: both variants use it
     // for their AUR transaction, while each system chooses the helper path.
     packages.extend(constants::AUR_DEPENDENCIES.iter().map(|s| String::from(*s)));
@@ -574,44 +554,40 @@ fn bootstrap_system<'a, 'b, 'c>(
     let packages = packages.into_iter().collect::<Vec<_>>();
     run_pacstrap_with_retries(
         &tools.pacstrap,
-        &bootstrap_config.pacman_conf,
-        mount_point.path(),
-        bootstrap_config.use_host_cache,
+        &bootstrap_config,
+        mount_path,
         &packages,
         command.dryrun,
-        bootstrap_config.use_host_mirrorlist,
     )
     .context("Pacstrap error")?;
 
-    system.complete_bootstrap(&context, &bootstrap_config)?;
-    if !command.dryrun {
-        fs::copy(
-            &bootstrap_config.target_pacman_conf,
-            mount_point.path().join("etc/pacman.conf"),
-        )
-        .context("Failed copying pacman.conf")?;
+    system.complete_bootstrap(context, &bootstrap_config)?;
+    // Pacman configuration ownership is variant-specific: generic Arch
+    // preserves the selected config in complete_bootstrap, while Omarchy
+    // installs its generated target config before in-target transactions.
+
+    if !system.provides_own_fstab() {
+        let fstab = fix_fstab(
+            &tools
+                .genfstab
+                .execute()
+                .arg("-U")
+                .arg(mount_path)
+                .run_text_output(command.dryrun)
+                .context("fstab error")?,
+            context.portable_target,
+        );
+
+        if !command.dryrun {
+            debug!("fstab:\n{fstab}");
+            fs::write(mount_path.join("etc/fstab"), fstab).context("fstab error")?;
+        }
     }
-
-    let fstab = fix_fstab(
-        &tools
-            .genfstab
-            .execute()
-            .arg("-U")
-            .arg(mount_point.path())
-            .run_text_output(command.dryrun)
-            .context("fstab error")?,
-        portable_target,
-    );
-
-    if !command.dryrun {
-        debug!("fstab:\n{fstab}");
-        fs::write(mount_point.path().join("etc/fstab"), fstab).context("fstab error")?;
-    };
 
     tools
         .arch_chroot
         .execute()
-        .arg(mount_point.path())
+        .arg(mount_path)
         .args(["passwd", "-d", "root"])
         .run(command.dryrun)
         .context("Failed to delete the root password")?;
@@ -620,61 +596,62 @@ fn bootstrap_system<'a, 'b, 'c>(
     if !command.dryrun {
         fs::OpenOptions::new()
             .append(true)
-            .open(mount_point.path().join("etc/locale.gen"))
+            .open(mount_path.join("etc/locale.gen"))
             .and_then(|mut locale_gen| locale_gen.write_all(b"en_US.UTF-8 UTF-8\n"))
             .context("Failed to create locale.gen")?;
-        fs::write(
-            mount_point.path().join("etc/locale.conf"),
-            "LANG=en_US.UTF-8",
-        )
-        .context("Failed to write to locale.conf")?;
+        fs::write(mount_path.join("etc/locale.conf"), "LANG=en_US.UTF-8")
+            .context("Failed to write to locale.conf")?;
     }
     tools
         .arch_chroot
         .execute()
-        .arg(mount_point.path())
+        .arg(mount_path)
         .arg("locale-gen")
         .run(command.dryrun)
         .context("locale-gen failed")?;
 
-    Ok((mount_point, mount_stack))
+    Ok(mount_stack)
 }
 
-/// Applies ALMA's shared removable-target runtime policy. Omarchy passes
-/// `true` for `omarchy_owned_zram` so its own zram-generator and sysctl
-/// defaults remain authoritative; generic Arch passes `false` and receives
-/// ALMA's portable zram configuration here.
-pub(crate) fn configure_portable_runtime(
+/// Applies ALMA's portable write-wear policy (zram-generator and sysctl
+/// defaults). Variants that own their own zram/sysctl policy (Omarchy) simply
+/// do not call this.
+pub(crate) fn configure_portable_zram_policy(
+    mount_path: &Path,
+    dryrun: bool,
+) -> anyhow::Result<()> {
+    let zram_path = mount_path.join("etc/systemd/zram-generator.conf.d/99-alma-portable.conf");
+    let sysctl_path = mount_path.join("etc/sysctl.d/99-alma-portable.conf");
+    if !dryrun {
+        fs::create_dir_all(zram_path.parent().expect("zram config has a parent"))?;
+        fs::create_dir_all(sysctl_path.parent().expect("sysctl config has a parent"))?;
+        fs::write(&zram_path, constants::PORTABLE_ZRAM_CONFIG)
+            .context("Failed to write portable zram-generator configuration")?;
+        fs::write(&sysctl_path, constants::PORTABLE_SYSCTL_CONFIG)
+            .context("Failed to write portable sysctl configuration")?;
+    } else {
+        println!(
+            "write {}\n{}",
+            zram_path.display(),
+            constants::PORTABLE_ZRAM_CONFIG
+        );
+        println!(
+            "write {}\n{}",
+            sysctl_path.display(),
+            constants::PORTABLE_SYSCTL_CONFIG
+        );
+    }
+    Ok(())
+}
+
+/// Applies ALMA's shared removable-target user-runtime policy: logind runtime
+/// directory sizing and profile-sync-daemon defaults.
+pub(crate) fn configure_portable_user_runtime(
     tools: &Tools,
     mount_path: &Path,
     username: Option<&str>,
-    omarchy_owned_zram: bool,
     dryrun: bool,
 ) -> anyhow::Result<()> {
-    if !omarchy_owned_zram {
-        let zram_path = mount_path.join("etc/systemd/zram-generator.conf.d/99-alma-portable.conf");
-        let sysctl_path = mount_path.join("etc/sysctl.d/99-alma-portable.conf");
-        if !dryrun {
-            fs::create_dir_all(zram_path.parent().expect("zram config has a parent"))?;
-            fs::create_dir_all(sysctl_path.parent().expect("sysctl config has a parent"))?;
-            fs::write(&zram_path, constants::PORTABLE_ZRAM_CONFIG)
-                .context("Failed to write portable zram-generator configuration")?;
-            fs::write(&sysctl_path, constants::PORTABLE_SYSCTL_CONFIG)
-                .context("Failed to write portable sysctl configuration")?;
-        } else {
-            println!(
-                "write {}\n{}",
-                zram_path.display(),
-                constants::PORTABLE_ZRAM_CONFIG
-            );
-            println!(
-                "write {}\n{}",
-                sysctl_path.display(),
-                constants::PORTABLE_SYSCTL_CONFIG
-            );
-        }
-    }
-
     let logind_path = mount_path.join("etc/systemd/logind.conf.d/99-alma-portable.conf");
     let logind_config = "[Login]\nRuntimeDirectorySize=600M\n";
     let psd_skel_path = mount_path.join("etc/skel/.config/psd/psd.conf");
