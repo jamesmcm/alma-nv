@@ -89,7 +89,8 @@ impl<'a> StorageDevice<'a> {
         path
     }
 
-    fn is_removable_device(&self) -> anyhow::Result<bool> {
+    // TODO: Can we do this better?
+    pub(crate) fn is_removable_device(&self) -> anyhow::Result<bool> {
         let mut path = self.sys_path();
         path.push("removable");
 

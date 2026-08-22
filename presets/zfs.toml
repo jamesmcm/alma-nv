@@ -1,13 +1,16 @@
+packages = []
 script = """
 set -exu
 
 cat << 'EOF' >> /etc/pacman.conf
 [archzfs]
-Server = https://archzfs.com/$repo/$arch
+SigLevel = Required
+Server = https://github.com/archzfs/archzfs/releases/download/experimental
 EOF
 
-pacman-key -r F75D9D76
-pacman-key --lsign-key F75D9D76
+pacman-key --recv-keys 3A9917BF0DED5C13F69AC68FABEC0A1208037BE9
+pacman-key --lsign-key 3A9917BF0DED5C13F69AC68FABEC0A1208037BE9
 
-pacman -Sy archzfs-linux
+pacman -S --needed --noconfirm linux-headers
+pacman -Sy zfs-dkms
 """
