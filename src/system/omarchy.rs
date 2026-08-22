@@ -1899,7 +1899,10 @@ mod tests {
 
     #[test]
     fn manifest_provider_pins_respect_upstream_selection() {
-        let mut packages = vec![String::from("kdenlive"), String::from("qt6-multimedia-ffmpeg")];
+        let mut packages = vec![
+            String::from("kdenlive"),
+            String::from("qt6-multimedia-ffmpeg"),
+        ];
         ensure_manifest_provider_pins(&mut packages);
         assert_eq!(packages.len(), 2);
     }
