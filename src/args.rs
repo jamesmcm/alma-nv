@@ -160,7 +160,7 @@ pub struct CreateCommand {
     pub allow_non_removable: bool,
 
     /// The AUR helper to install for handling AUR packages.
-    #[clap(long = "aur-helper", value_enum, default_value_t = AurHelper::Paru, ignore_case = true)]
+    #[clap(long = "aur-helper", value_enum, default_value_t = AurHelper::Yay, ignore_case = true)]
     pub aur_helper: AurHelper,
 
     /// Do not ask for confirmation (not supported for Omarchy or encryption)

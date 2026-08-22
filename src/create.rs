@@ -737,12 +737,28 @@ fn bake_sources_into_image(
             dest.display()
         );
         if !command.dryrun {
-            fs_extra::dir::copy(
-                preset_wrapper.to_path(),
-                &dest,
-                &fs_extra::dir::CopyOptions::new(),
-            )?;
+            copy_preset_contents(preset_wrapper.to_path(), &dest)?;
         }
+    }
+    Ok(())
+}
+
+fn copy_preset_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let target = dst.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy_preset_contents(&entry.path(), &target)?;
+            } else {
+                fs::copy(entry.path(), &target)?;
+            }
+        }
+    } else {
+        let file_name = src.file_name().context("Preset path has no file name")?;
+        fs::create_dir_all(dst)?;
+        fs::copy(src, dst.join(file_name))?;
     }
     Ok(())
 }
@@ -910,27 +926,29 @@ fn run_preset_script(
         .context("Failed creating temporary preset script")?;
     script_file
         .write_all(script.script_text.as_bytes())
-        .and_then(|_| script_file.as_file_mut().metadata())
-        .and_then(|metadata| {
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(script_file.path(), permissions)
-        })
+        .and_then(|_| script_file.as_file().sync_all())
         .context("Failed creating temporary preset script")?;
 
-    let script_path_in_chroot = Path::new("/").join(
-        script_file
-            .path()
-            .file_name()
-            .expect("Script path had no file name"),
-    );
+    let temp_path = script_file.into_temp_path();
 
-    arch_chroot
+    let mut perms = fs::metadata(&temp_path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&temp_path, perms)?;
+
+    let script_path_in_chroot =
+        Path::new("/").join(temp_path.file_name().expect("Script path had no file name"));
+
+    let result = arch_chroot
         .execute()
         .arg(mount_path)
-        .arg(script_path_in_chroot)
-        .run(command.dryrun)
-        .with_context(|| format!("Failed running preset script:\n{}", script.script_text))?;
+        .arg(&script_path_in_chroot)
+        .run(command.dryrun);
+
+    if let Err(e) = temp_path.close() {
+        log::warn!("Failed to clean up temporary preset script file: {e}");
+    }
+
+    result.with_context(|| format!("Failed running preset script:\n{}", script.script_text))?;
 
     Ok(())
 }

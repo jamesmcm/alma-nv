@@ -1,4 +1,19 @@
-packages = ["plasma-desktop", "dolphin", "gwenview", "konsole", "ttf-dejavu", "sddm"]
+packages = [
+    "plasma-desktop",
+    "dolphin",
+    "gwenview",
+    "konsole",
+    "ttf-dejavu",
+    "sddm",
+    "sddm-kcm",
+    "plasma-nm",
+    "pipewire",
+    "pipewire-pulse",
+    "pipewire-alsa",
+    "wireplumber",
+    "xdg-user-dirs",
+    "xdg-utils",
+]
 script = """
 set -exu
 

@@ -316,7 +316,7 @@ OPTIONS:
         --aur-helper <aur-helper>
             The AUR helper to install for handling AUR packages
 
-            [default: paru]
+            [default: yay]
             [possible values: paru, yay]
 
         --aur-packages <AUR_PACKAGE>
