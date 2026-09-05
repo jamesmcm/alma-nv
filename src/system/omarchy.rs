@@ -184,24 +184,31 @@ if command -v btrfs >/dev/null 2>&1 && [ -d /.snapshots ]; then\n\
 fi\n";
 
 /// Virtual dependencies inside `omarchy-base.packages` that no other package
-/// names by its concrete provider. They must be added as explicit targets of
-/// the manifest transaction, or pacman raises an interactive provider prompt
-/// before its confirmation.
-const OMARCHY_MANIFEST_PROVIDER_PINS: &[&str] = &[
+/// names by its concrete provider. Without an explicit selection pacman
+/// raises an interactive provider prompt before its confirmation. Each group
+/// lists the known providers of one virtual dependency in preference order;
+/// the first entry is the default applied when the manifest names none of
+/// them. When upstream's manifest names a provider itself, its choice wins
+/// so the transaction can never end up with two providers of the same
+/// virtual dependency (upstream snapshots have already flipped providers
+/// once, e.g. quickshell to quickshell-git).
+const OMARCHY_MANIFEST_PROVIDER_GROUPS: &[&[&str]] = &[
     // kdenlive/omacut/qt6-speech pull in `qt6-multimedia`, which depends on
     // the virtual `qt6-multimedia-backend` (ffmpeg vs gstreamer backends).
-    "qt6-multimedia-ffmpeg",
+    &["qt6-multimedia-ffmpeg", "qt6-multimedia-gstreamer"],
 ];
 
 fn ensure_manifest_provider_pins(manifest_packages: &mut Vec<String>) {
-    for pin in OMARCHY_MANIFEST_PROVIDER_PINS {
-        if !manifest_packages.iter().any(|package| package == *pin) {
-            info!(
-                "Adding explicit '{}' selection to the Omarchy manifest transaction",
-                pin
-            );
-            manifest_packages.push((*pin).to_string());
+    for group in OMARCHY_MANIFEST_PROVIDER_GROUPS {
+        if group
+            .iter()
+            .any(|provider| manifest_packages.iter().any(|package| package == *provider))
+        {
+            continue;
         }
+        let default = group[0];
+        info!("Adding explicit '{default}' selection to the Omarchy manifest transaction");
+        manifest_packages.push(String::from(default));
     }
 }
 
@@ -283,6 +290,78 @@ pub(crate) fn prioritize_packages(
             true
         })
         .collect()
+}
+
+/// Reads the installed quickshell provider from the target's pacman local
+/// database. Returns the provider name and its version, e.g.
+/// `("quickshell", "0.3.1-1")`.
+fn installed_quickshell_provider(local_db: &Path) -> Option<(String, String)> {
+    const QUICKSHELL_PROVIDERS: [&str; 2] = ["quickshell", "quickshell-git"];
+    for entry in fs::read_dir(local_db).ok()?.flatten() {
+        let Ok(desc) = fs::read_to_string(entry.path().join("desc")) else {
+            continue;
+        };
+        if let Some(provider) = QUICKSHELL_PROVIDERS
+            .iter()
+            .find(|provider| desc.contains(&format!("%NAME%\n{provider}\n")))
+        {
+            let version = desc
+                .split("%VERSION%\n")
+                .nth(1)
+                .and_then(|rest| rest.lines().next())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            return Some(((*provider).to_string(), version));
+        }
+    }
+    None
+}
+
+/// Aligns the quickshell provider preinstalled by the bootstrap transaction
+/// with the provider the authoritative manifest selects. `omarchy` depends on
+/// the plain `quickshell` name, which both Arch's `quickshell` package and
+/// Omarchy's `quickshell-git` package satisfy; the two packages conflict, and
+/// upstream snapshots have switched between them. When the manifest names the
+/// other provider, the installed package is removed first (with the
+/// `quickshell` dependency assumed satisfied) so the manifest transaction can
+/// install its own choice without a conflict.
+fn reconcile_quickshell_provider(
+    arch_chroot: &Tool,
+    mount_path: &Path,
+    base_manifest: &HashSet<String>,
+    dryrun: bool,
+) -> Result<()> {
+    let selected = ["quickshell", "quickshell-git"]
+        .into_iter()
+        .find(|provider| base_manifest.contains(*provider));
+    let installed = installed_quickshell_provider(&mount_path.join("var/lib/pacman/local"));
+    let (Some((installed, version)), Some(selected)) = (installed, selected) else {
+        return Ok(());
+    };
+    if installed == selected {
+        return Ok(());
+    }
+    info!(
+        "Upstream Omarchy manifest selects '{selected}' but the bootstrap transaction installed '{installed}'; removing it before the manifest transaction"
+    );
+    let assumed = format!("quickshell={version}");
+    arch_chroot
+        .execute()
+        .arg(mount_path)
+        .args([
+            "pacman",
+            "-Rns",
+            "--noconfirm",
+            "--assume-installed",
+            &assumed,
+            &installed,
+        ])
+        .run(dryrun)
+        .context(format!(
+            "Failed to remove '{installed}' before installing the manifest-selected '{selected}'"
+        ))?;
+    Ok(())
 }
 
 /// Installs packages supplementing the complete Omarchy base manifest through
@@ -1474,12 +1553,16 @@ impl SystemInstaller for Omarchy {
             "base-devel",
             "limine",
             "btrfs-progs",
-            // `omarchy` depends on the virtual `quickshell` name, while the
-            // authoritative Quattro manifest selects Omarchy's
-            // `quickshell-git` provider. Make that provider explicit in the
-            // first transaction so pacman cannot install Arch's conflicting
-            // `quickshell` package before the manifest is applied.
-            "quickshell-git",
+            // `omarchy` depends on the plain `quickshell` name. Both Arch's
+            // `quickshell` package and Omarchy's `quickshell-git` package
+            // (which Provides it) satisfy that dependency, but the two
+            // packages conflict with each other. The authoritative Quattro
+            // manifest names the concrete provider, and upstream snapshots
+            // have switched between them. Pinning `quickshell` matches the
+            // current manifest; `reconcile_quickshell_provider` removes this
+            // package again if a future snapshot flips back to
+            // `quickshell-git`.
+            "quickshell",
             // The Omarchy other-manifest selects PipeWire's JACK provider;
             // make it explicit so dependencies on the virtual `jack` name do
             // not select the conflicting `jack2` provider first.
@@ -1574,6 +1657,12 @@ impl SystemInstaller for Omarchy {
             );
             let mut manifest_packages = manifest_packages.into_iter().collect::<Vec<_>>();
             ensure_manifest_provider_pins(&mut manifest_packages);
+            reconcile_quickshell_provider(
+                &context.tools.arch_chroot,
+                context.mount_path,
+                &base_manifest,
+                context.command.dryrun,
+            )?;
             create::run_pacstrap_with_retries(
                 &context.tools.pacstrap,
                 config,
@@ -1876,6 +1965,48 @@ mod tests {
     }
 
     #[test]
+    fn installed_quickshell_provider_parses_local_db_desc() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let local_db = temp.path().join("var/lib/pacman/local");
+        fs::create_dir_all(&local_db).expect("create local db");
+        assert_eq!(installed_quickshell_provider(&local_db), None);
+
+        let entry = local_db.join("quickshell-0.3.1-1");
+        fs::create_dir_all(&entry).expect("create entry");
+        fs::write(
+            entry.join("desc"),
+            "%NAME%\nquickshell\n%VERSION%\n0.3.1-1\n%BASE%\nquickshell\n",
+        )
+        .expect("write desc");
+        assert_eq!(
+            installed_quickshell_provider(&local_db),
+            Some((String::from("quickshell"), String::from("0.3.1-1")))
+        );
+    }
+
+    #[test]
+    fn installed_quickshell_provider_distinguishes_git_suffix() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let local_db = temp.path().join("var/lib/pacman/local");
+        fs::create_dir_all(&local_db).expect("create local db");
+
+        let entry = local_db.join("quickshell-git-0.3.0.r20.g28771c7-2");
+        fs::create_dir_all(&entry).expect("create entry");
+        fs::write(
+            entry.join("desc"),
+            "%NAME%\nquickshell-git\n%VERSION%\n0.3.0.r20.g28771c7-2\n",
+        )
+        .expect("write desc");
+        assert_eq!(
+            installed_quickshell_provider(&local_db),
+            Some((
+                String::from("quickshell-git"),
+                String::from("0.3.0.r20.g28771c7-2")
+            ))
+        );
+    }
+
+    #[test]
     fn manifest_provider_pins_are_appended_exactly_once() {
         let mut packages = vec![String::from("kdenlive"), String::from("qt6-multimedia")];
         ensure_manifest_provider_pins(&mut packages);
@@ -1905,5 +2036,23 @@ mod tests {
         ];
         ensure_manifest_provider_pins(&mut packages);
         assert_eq!(packages.len(), 2);
+    }
+
+    #[test]
+    fn manifest_provider_pins_follow_upstream_backend_flip() {
+        // A future snapshot naming the gstreamer backend must not also get
+        // the ffmpeg default appended: the two backends both provide the
+        // qt6-multimedia-backend virtual and would end up installed together.
+        let mut packages = vec![
+            String::from("kdenlive"),
+            String::from("qt6-multimedia-gstreamer"),
+        ];
+        ensure_manifest_provider_pins(&mut packages);
+        assert_eq!(packages.len(), 2);
+        assert!(
+            !packages
+                .iter()
+                .any(|package| package == "qt6-multimedia-ffmpeg")
+        );
     }
 }

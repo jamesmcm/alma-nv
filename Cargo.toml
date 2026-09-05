@@ -1,7 +1,7 @@
 [package]
 name = "alma-nv"
 description = "Create Arch Linux based bootable USB drives"
-version = "0.12.0"
+version = "0.12.1"
 authors = ["James McMurray <jamesmcm03@gmail.com>", "Roey Darwish Dror (original ALMA, now archived)"]
 edition = "2024"
 license = "GPL-3.0-or-later"
